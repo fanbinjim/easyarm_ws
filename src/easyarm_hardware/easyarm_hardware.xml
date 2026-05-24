@@ -1,0 +1,9 @@
+<library path="easyarm_hardware">
+  <class name="easyarm_hardware/EasyArmHardware"
+         type="easyarm_hardware::EasyArmHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control hardware interface for EasyArm with Robstride CAN motors.
+    </description>
+  </class>
+</library>

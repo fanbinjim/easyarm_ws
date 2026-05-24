@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: easyarm_description
+    relative_path: urdf/easyarm_a1_h0521.urdf
+  srdf:
+    relative_path: config/EasyARM-A1.srdf
+  package_settings:
+    author_name: fanbin
+    author_email: fanbinjim@qq.com
+    generated_timestamp: 1779350413
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
