@@ -10,7 +10,17 @@
 - `POSITION`：正常 MoveIt + `JointTrajectoryController` 轨迹跟踪，在位置控制基础上叠加重力补偿。
 - `DRAG`：拖拽示教模式，`kp=0`，`kd=drag_kd`，`velocity=0`，`tau=gravity(q) * drag_gravity_scale`。
 
-切换命令：
+切换命令（推荐）：
+
+```bash
+ros2 run easyarm_a1_moveit_config switch_controller_mode IDLE
+ros2 run easyarm_a1_moveit_config switch_controller_mode POSITION
+ros2 run easyarm_a1_moveit_config switch_controller_mode DRAG
+```
+
+`switch_controller_mode` 在切到 `POSITION` 时会先将当前 `/joint_states` 位置发给 `arm_controller` 作为 hold trajectory，避免切回后机械臂回旧目标。
+
+底层参数切换（备选）：
 
 ```bash
 ros2 param set /easyarm_hardware_control_mode controller_mode IDLE
