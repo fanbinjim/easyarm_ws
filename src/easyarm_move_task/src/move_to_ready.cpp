@@ -4,6 +4,8 @@
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <rclcpp/rclcpp.hpp>
 
+#include "controller_mode_utils.hpp"
+
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
@@ -15,6 +17,13 @@ int main(int argc, char * argv[])
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node);
   std::thread spinner([&executor]() { executor.spin(); });
+
+  RCLCPP_INFO(node->get_logger(), "Switching hardware to POSITION mode");
+  if (set_controller_mode(*node, "POSITION")) {
+    RCLCPP_INFO(node->get_logger(), "Switched to POSITION mode");
+  } else {
+    RCLCPP_WARN(node->get_logger(), "Failed to switch to POSITION mode");
+  }
 
   static constexpr auto kPlanningGroup = "arm";
   static constexpr auto kNamedTarget = "ready";

@@ -82,7 +82,7 @@ disable_hardware() {
 }
 
 log "Moving arm to ready before shutdown..."
-if ! ros2 run "${PACKAGE_NAME}" move_to_ready; then
+if ! ros2 run easyarm_move_task move_to_ready; then
   log "move_to_ready failed. Shutdown aborted so the arm is not left in an unknown state."
   exit 1
 fi

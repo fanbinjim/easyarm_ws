@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SHUTDOWN_SCRIPT="${WORKSPACE_DIR}/src/easyarm_a1_moveit_config/scripts/safe_shutdown_demo.sh"
+SHUTDOWN_SCRIPT="${WORKSPACE_DIR}/src/easyarm_move_task/scripts/safe_shutdown_demo.sh"
 
 cd "${WORKSPACE_DIR}"
 

@@ -3,7 +3,7 @@
 ## 仓库形态
 
 - 这是 ROS 2 Humble `colcon` workspace；源码包都在 `src/` 下，且都是 `ament_cmake` 包。
-- 当前 `colcon list` 输出的包：`robstride_can`、`easyarm_description`、`easyarm_hardware`、`easyarm_dynamics`、`easyarm_a1_moveit_config`。
+- 当前 `colcon list` 输出的包：`robstride_can`、`easyarm_description`、`easyarm_hardware`、`easyarm_dynamics`、`easyarm_a1_moveit_config`、`easyarm_move_task`。
 - 根目录 `README.md` 为空；遇到冲突时优先相信 `package.xml`、`CMakeLists.txt`、launch 文件和包内 README。
 
 ## 沟通约定
@@ -16,7 +16,8 @@
 - `easyarm_hardware`：ros2_control `SystemInterface` 插件，导出名为 `easyarm_hardware/EasyArmHardware`；依赖 `robstride_can`，并从 ros2_control xacro 解析电机/关节参数。
 - `easyarm_dynamics`：只放 Pinocchio/Eigen 刚体动力学封装（`RobotModel` 从 URDF 加载模型；计算 gravity、NLE、mass matrix、inverse dynamics）；不要放控制逻辑、硬件 ID、MoveIt 配置、CAN 参数、offset 或 limit。
 - `easyarm_description`：只放机器人描述资源（`urdf/`、`meshes/`、`rviz/`、display launch）；MoveIt 配置引用 `easyarm_description/urdf/easyarm_a1_h0521.urdf`。
-- `easyarm_a1_moveit_config`：生成的 MoveIt 配置，加上本地 `move_to_ready` 可执行文件和 `safe_shutdown_demo.sh`；其 xacro 将 `EasyARM-A1` 接到 `easyarm_hardware/EasyArmHardware`。
+- `easyarm_a1_moveit_config`：生成的 MoveIt 配置，不含可执行程序或脚本；其 xacro 将 `EasyARM-A1` 接到 `easyarm_hardware/EasyArmHardware`。
+- `easyarm_move_task`：上层控制任务工具（`move_to_ready`、`switch_controller_mode` 模式切换、`safe_shutdown_demo.sh`），依赖 MoveIt + `easyarm_hardware`；不要放硬件驱动或动力学模型。
 
 ## 常用命令
 
@@ -34,7 +35,7 @@
 - `ros2 launch easyarm_a1_moveit_config demo.launch.py` 默认会使用真实硬件，因为 `use_mock_hardware` 是 false。
 - 不要运行 `single_motor_demo`、`discover_motors`、`set_zero_pos`、`move_to_ready` 或 `safe_shutdown_demo.sh`，除非用户确认硬件已连接且处于安全状态；这些程序会 enable/disable 电机或执行运动/零位设置。
 - 真实硬件测试前必须先配置 SocketCAN，例如 `sudo ip link set can0 down`、`sudo ip link set can0 type can bitrate 1000000`、`sudo ip link set can0 up`。
-- 关机优先使用根目录 wrapper：`scripts/safe_shutdown_easyarm.sh`；它会在存在时 source `install/setup.bash`，再运行 `src/easyarm_a1_moveit_config/scripts/safe_shutdown_demo.sh`。
+- 关机优先使用根目录 wrapper：`scripts/safe_shutdown_easyarm.sh`；它会在存在时 source `install/setup.bash`，再运行 `src/easyarm_move_task/scripts/safe_shutdown_demo.sh`。
 
 ## 风格和 API 注意事项
 

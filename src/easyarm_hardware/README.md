@@ -13,9 +13,9 @@
 切换命令（推荐）：
 
 ```bash
-ros2 run easyarm_a1_moveit_config switch_controller_mode IDLE
-ros2 run easyarm_a1_moveit_config switch_controller_mode POSITION
-ros2 run easyarm_a1_moveit_config switch_controller_mode DRAG
+ros2 run easyarm_move_task switch_controller_mode IDLE
+ros2 run easyarm_move_task switch_controller_mode POSITION
+ros2 run easyarm_move_task switch_controller_mode DRAG
 ```
 
 `switch_controller_mode` 在切到 `POSITION` 时会先将当前 `/joint_states` 位置发给 `arm_controller` 作为 hold trajectory，避免切回后机械臂回旧目标。

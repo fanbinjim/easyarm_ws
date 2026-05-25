@@ -9,7 +9,8 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <control_msgs/action/follow_joint_trajectory.hpp>
-#include <rcl_interfaces/srv/set_parameters.hpp>
+
+#include "controller_mode_utils.hpp"
 
 namespace
 {
@@ -17,40 +18,6 @@ namespace
 static const std::vector<std::string> kJointNames = {
   "Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"
 };
-
-void set_hardware_mode(
-  rclcpp::Node & node, rclcpp::Logger & logger, const std::string & mode)
-{
-  auto client = node.create_client<rcl_interfaces::srv::SetParameters>(
-    "/easyarm_hardware_control_mode/set_parameters");
-
-  if (!client->wait_for_service(std::chrono::seconds(2))) {
-    RCLCPP_ERROR(logger, "Hardware control mode node not available");
-    std::exit(1);
-  }
-
-  auto request = std::make_shared<rcl_interfaces::srv::SetParameters::Request>();
-  rclcpp::Parameter param("controller_mode", mode);
-  request->parameters.push_back(param.to_parameter_msg());
-
-  auto future = client->async_send_request(request);
-  if (rclcpp::spin_until_future_complete(
-        node.get_node_base_interface(), future, std::chrono::seconds(2)) !=
-      rclcpp::FutureReturnCode::SUCCESS) {
-    RCLCPP_ERROR(logger, "Failed to set controller_mode: timeout");
-    std::exit(1);
-  }
-
-  auto result = future.get();
-  for (const auto & res : result->results) {
-    if (!res.successful) {
-      RCLCPP_ERROR(logger, "Failed to set controller_mode: %s", res.reason.c_str());
-      std::exit(1);
-    }
-  }
-
-  RCLCPP_INFO(logger, "controller_mode set to %s", mode.c_str());
-}
 
 bool wait_for_joint_positions(
   rclcpp::Node & node, rclcpp::Logger & logger,
@@ -79,11 +46,9 @@ bool wait_for_joint_positions(
     });
 
   auto start = std::chrono::steady_clock::now();
-  rclcpp::executors::SingleThreadedExecutor executor;
-  executor.add_node(node.get_node_base_interface());
 
   while (!got && rclcpp::ok()) {
-    executor.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (std::chrono::steady_clock::now() - start > timeout) {
       RCLCPP_ERROR(logger, "Timeout waiting for joint states");
       return false;
@@ -145,11 +110,9 @@ void hold_current_position(rclcpp::Node & node, rclcpp::Logger & logger)
   action_client->async_send_goal(goal, send_goal_options);
 
   auto start = std::chrono::steady_clock::now();
-  rclcpp::executors::SingleThreadedExecutor executor;
-  executor.add_node(node.get_node_base_interface());
 
   while (!goal_accepted && rclcpp::ok()) {
-    executor.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (std::chrono::steady_clock::now() - start > std::chrono::seconds(3)) {
       RCLCPP_ERROR(logger, "Timeout waiting for goal acceptance");
       std::exit(1);
@@ -189,13 +152,27 @@ int main(int argc, char * argv[])
     rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(true));
   auto logger = node->get_logger();
 
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  std::thread spinner([&executor]() { executor.spin(); });
+
   if (mode == "POSITION") {
     RCLCPP_INFO(logger, "Holding current position before switching to POSITION");
     hold_current_position(*node, logger);
   }
 
-  set_hardware_mode(*node, logger, mode);
+  if (!set_controller_mode(*node, mode)) {
+    RCLCPP_ERROR(logger, "Failed to set controller_mode to %s", mode.c_str());
+    executor.cancel();
+    if (spinner.joinable()) spinner.join();
+    rclcpp::shutdown();
+    return 1;
+  }
 
+  RCLCPP_INFO(logger, "controller_mode set to %s", mode.c_str());
+
+  executor.cancel();
+  if (spinner.joinable()) spinner.join();
   rclcpp::shutdown();
   return 0;
 }
