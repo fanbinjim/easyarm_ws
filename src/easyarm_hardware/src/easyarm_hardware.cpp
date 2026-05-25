@@ -60,6 +60,24 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
     gravity_compensation_scale_ = std::clamp(
       parse_double_parameter(params.at("gravity_compensation_scale"), gravity_compensation_scale_), 0.0, 1.0);
   }
+  if (params.count("idle_kd")) {
+    idle_kd_ = std::clamp(parse_double_parameter(params.at("idle_kd"), idle_kd_), 0.0, 5.0);
+  }
+  if (params.count("drag_gravity_scale")) {
+    drag_gravity_scale_ = std::clamp(
+      parse_double_parameter(params.at("drag_gravity_scale"), drag_gravity_scale_), 0.0, 1.0);
+  }
+  if (params.count("drag_kd")) {
+    drag_kd_ = std::clamp(parse_double_parameter(params.at("drag_kd"), drag_kd_), 0.0, 5.0);
+  }
+  if (params.count("control_torque_limit_scale")) {
+    control_torque_limit_scale_ = std::clamp(
+      parse_double_parameter(params.at("control_torque_limit_scale"), control_torque_limit_scale_), 0.0, 1.0);
+  }
+  if (params.count("hardware_control_mode")) {
+    control_mode_ = parse_hardware_control_mode(params.at("hardware_control_mode"));
+    requested_control_mode_.store(static_cast<int>(control_mode_));
+  }
   if (params.count("control_mode")) {
     desired_motor_mode_ = parse_control_mode(params.at("control_mode"));
   }
@@ -124,10 +142,15 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
     use_mock_hardware_ ? "true" : "false");
   RCLCPP_INFO(
     logger_,
-    "Gravity compensation: enabled=%s, scale=%.2f, urdf=%s",
+    "Gravity compensation: enabled=%s, position_scale=%.2f, idle_kd=%.2f, drag_scale=%.2f, drag_kd=%.2f, torque_limit_scale=%.2f, urdf=%s",
     enable_gravity_compensation_ ? "true" : "false",
     gravity_compensation_scale_,
+    idle_kd_,
+    drag_gravity_scale_,
+    drag_kd_,
+    control_torque_limit_scale_,
     urdf_path_.empty() ? "<empty>" : urdf_path_.c_str());
+  RCLCPP_INFO(logger_, "Initial hardware control mode: %s", hardware_control_mode_name(control_mode_));
   RCLCPP_INFO(logger_, "Desired motor control mode: %s", control_mode_name(desired_motor_mode_));
 
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -208,6 +231,8 @@ bool EasyArmHardware::parse_joint_config(const hardware_interface::HardwareInfo 
 
 hardware_interface::CallbackReturn EasyArmHardware::on_configure(const rclcpp_lifecycle::State &)
 {
+  start_control_mode_node();
+
   robot_model_.reset();
   if (enable_gravity_compensation_) {
     if (urdf_path_.empty()) {
@@ -268,6 +293,9 @@ hardware_interface::CallbackReturn EasyArmHardware::on_configure(const rclcpp_li
 hardware_interface::CallbackReturn EasyArmHardware::on_cleanup(const rclcpp_lifecycle::State &)
 {
   active_motor_mode_ = MotorControlMode::MotionControl;
+  control_mode_ = ControlMode::Position;
+  requested_control_mode_.store(static_cast<int>(control_mode_));
+  stop_control_mode_node();
   robot_model_.reset();
   if (can_driver_) {
     can_driver_->stopReceiveThread();
@@ -475,6 +503,8 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
   static uint64_t frequency_counter = 0;
   static auto frequency_window_start = std::chrono::steady_clock::now();
 
+  apply_requested_control_mode();
+
   if (use_mock_hardware_) {
     for (size_t i = 0; i < joint_configs_.size(); ++i) {
       hw_commands_positions_[i] = clamp_joint_position(i, hw_commands_positions_[i]);
@@ -512,22 +542,23 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
 
   auto write_deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(4500);
 
-  bool use_gravity_torque = enable_gravity_compensation_ && robot_model_ &&
+  const bool mode_needs_gravity = control_mode_ == ControlMode::Position || control_mode_ == ControlMode::Drag;
+  const bool need_gravity_torque = mode_needs_gravity && enable_gravity_compensation_ && robot_model_ &&
     active_motor_mode_ == MotorControlMode::MotionControl;
-  if (use_gravity_torque) {
+  bool gravity_torque_available = need_gravity_torque;
+  if (gravity_torque_available) {
     for (size_t i = 0; i < joint_configs_.size(); ++i) {
       gravity_positions_[static_cast<Eigen::Index>(i)] = hw_positions_[i];
     }
 
     try {
       gravity_torques_ = robot_model_->gravity(gravity_positions_);
-      gravity_torques_ *= gravity_compensation_scale_;
     } catch (const std::exception & exception) {
       static int gravity_warn_counter = 0;
       if (gravity_warn_counter++ % 200 == 0) {
         RCLCPP_WARN(logger_, "Gravity compensation failed: %s", exception.what());
       }
-      use_gravity_torque = false;
+      gravity_torque_available = false;
     }
   }
 
@@ -541,6 +572,36 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
     }
 
     const auto & config = joint_configs_[i];
+    const auto motor_params = getMotorParams(config.motor_type);
+
+    if (control_mode_ == ControlMode::Idle || control_mode_ == ControlMode::Drag) {
+      const double motor_position = hw_positions_[i] * config.direction + config.position_offset;
+      const double clamped_motor_position = std::clamp(motor_position, motor_params.p_min, motor_params.p_max);
+      const double joint_torque = control_mode_ == ControlMode::Drag && gravity_torque_available ?
+        gravity_torques_[static_cast<Eigen::Index>(i)] * drag_gravity_scale_ : 0.0;
+      const double max_torque = motor_params.t_max * control_torque_limit_scale_;
+      const double command_torque = std::clamp(joint_torque * config.direction, -max_torque, max_torque);
+      const double command_kd = control_mode_ == ControlMode::Drag ? drag_kd_ : idle_kd_;
+
+      // IDLE 是纯阻尼模式；DRAG 的 torque 只放 gravity 项，阻尼交给电机 velocity/kd 字段处理。
+      const bool command_sent = can_driver_->sendMotionControl(
+        config.motor_id,
+        config.motor_type,
+        clamped_motor_position,
+        0.0,
+        0.0,
+        command_kd,
+        command_torque);
+      if (!command_sent) {
+        static int warn_counter = 0;
+        if (warn_counter++ % 1000 == 0) {
+          RCLCPP_WARN(logger_, "Failed to send %s command to motor %u", hardware_control_mode_name(control_mode_), config.motor_id);
+        }
+      }
+
+      std::this_thread::sleep_for(std::chrono::microseconds(50));
+      continue;
+    }
 
     // 先在关节空间做机械臂 joint limit 保护，电机侧限幅只作为协议范围保护。
     const double target_position = clamp_joint_position(i, hw_commands_positions_[i]);
@@ -595,15 +656,15 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
 
     const double motor_position = smoothed_positions_[i] * config.direction + config.position_offset;
     const double motor_velocity = velocity_ff_stage2_[i] * config.direction;
-    const double joint_torque = use_gravity_torque ?
-      gravity_torques_[static_cast<Eigen::Index>(i)] : hw_commands_efforts_[i];
-    const double motor_torque = joint_torque * config.direction;
+    const double joint_torque = gravity_torque_available ?
+      gravity_torques_[static_cast<Eigen::Index>(i)] * gravity_compensation_scale_ : hw_commands_efforts_[i];
+    const double max_torque = motor_params.t_max * control_torque_limit_scale_;
+    const double motor_torque = std::clamp(joint_torque * config.direction, -max_torque, max_torque);
     const double command_kp = 10.0;
     constexpr double command_kd = 5.0;
     const double command_velocity = motor_velocity;
     const double command_torque = motor_torque;
 
-    auto motor_params = getMotorParams(config.motor_type);
     const double clamped_motor_position = std::clamp(motor_position, motor_params.p_min, motor_params.p_max);
 
     // if (write_counter % 200 == 0) {
@@ -677,6 +738,47 @@ const char * EasyArmHardware::control_mode_name(MotorControlMode mode) const
   }
 }
 
+ControlMode EasyArmHardware::parse_hardware_control_mode(const std::string & value) const
+{
+  ControlMode mode{ControlMode::Position};
+  if (try_parse_hardware_control_mode(value, mode)) {
+    return mode;
+  }
+
+  RCLCPP_WARN(logger_, "Unknown hardware_control_mode '%s', fallback to position", value.c_str());
+  return ControlMode::Position;
+}
+
+bool EasyArmHardware::try_parse_hardware_control_mode(const std::string & value, ControlMode & mode) const
+{
+  if (value == "idle" || value == "IDLE") {
+    mode = ControlMode::Idle;
+    return true;
+  }
+  if (value == "position" || value == "POSITION") {
+    mode = ControlMode::Position;
+    return true;
+  }
+  if (value == "drag" || value == "DRAG") {
+    mode = ControlMode::Drag;
+    return true;
+  }
+  return false;
+}
+
+const char * EasyArmHardware::hardware_control_mode_name(ControlMode mode) const
+{
+  switch (mode) {
+    case ControlMode::Idle:
+      return "IDLE";
+    case ControlMode::Drag:
+      return "DRAG";
+    case ControlMode::Position:
+    default:
+      return "POSITION";
+  }
+}
+
 MotorType EasyArmHardware::parse_motor_type(const std::string & value) const
 {
   if (value == "RS00" || value == "rs00") {
@@ -727,6 +829,128 @@ bool EasyArmHardware::parse_bool_parameter(const std::string & value, bool defau
     return false;
   }
   return default_value;
+}
+
+void EasyArmHardware::start_control_mode_node()
+{
+  if (control_mode_node_) {
+    return;
+  }
+
+  control_mode_node_ = std::make_shared<rclcpp::Node>("easyarm_hardware_control_mode");
+  control_mode_node_->declare_parameter("controller_mode", hardware_control_mode_name(control_mode_));
+  control_mode_param_callback_ = control_mode_node_->add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter> & parameters) {
+      return on_control_mode_parameters(parameters);
+    });
+
+  control_mode_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+  control_mode_executor_->add_node(control_mode_node_);
+  control_mode_executor_thread_ = std::thread([this]() {
+    control_mode_executor_->spin();
+  });
+
+  RCLCPP_INFO(logger_, "Control mode parameter node started under /easyarm_hardware_control_mode");
+}
+
+void EasyArmHardware::stop_control_mode_node()
+{
+  if (control_mode_executor_) {
+    control_mode_executor_->cancel();
+  }
+  if (control_mode_executor_thread_.joinable()) {
+    control_mode_executor_thread_.join();
+  }
+  if (control_mode_executor_ && control_mode_node_) {
+    control_mode_executor_->remove_node(control_mode_node_);
+  }
+
+  control_mode_param_callback_.reset();
+  control_mode_executor_.reset();
+  control_mode_node_.reset();
+}
+
+rcl_interfaces::msg::SetParametersResult EasyArmHardware::on_control_mode_parameters(
+  const std::vector<rclcpp::Parameter> & parameters)
+{
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+
+  for (const auto & parameter : parameters) {
+    if (parameter.get_name() != "controller_mode") {
+      continue;
+    }
+
+    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_STRING) {
+      result.successful = false;
+      result.reason = "controller_mode must be a string: IDLE, POSITION, or DRAG";
+      return result;
+    }
+
+    ControlMode mode{ControlMode::Position};
+    if (!try_parse_hardware_control_mode(parameter.as_string(), mode)) {
+      result.successful = false;
+      result.reason = "Unknown controller_mode. Expected IDLE, POSITION, or DRAG";
+      return result;
+    }
+
+    std::string message;
+    if (!request_control_mode(mode, message)) {
+      result.successful = false;
+      result.reason = message;
+      return result;
+    }
+  }
+
+  return result;
+}
+
+bool EasyArmHardware::request_control_mode(ControlMode mode, std::string & message)
+{
+  if (mode != ControlMode::Position && active_motor_mode_ != MotorControlMode::MotionControl) {
+    message = "IDLE/DRAG require motion_control motor mode";
+    return false;
+  }
+  if (mode == ControlMode::Drag && !enable_gravity_compensation_) {
+    message = "DRAG requires enable_gravity_compensation=true";
+    return false;
+  }
+  if (mode == ControlMode::Drag && !robot_model_) {
+    message = "DRAG requires loaded dynamics model";
+    return false;
+  }
+
+  requested_control_mode_.store(static_cast<int>(mode));
+  message = std::string("requested ") + hardware_control_mode_name(mode);
+  return true;
+}
+
+void EasyArmHardware::apply_requested_control_mode()
+{
+  const auto requested_mode = static_cast<ControlMode>(requested_control_mode_.load());
+  if (requested_mode == control_mode_) {
+    return;
+  }
+
+  sync_states_to_commands();
+  reset_command_filters_to_current_state();
+  control_mode_ = requested_mode;
+  RCLCPP_INFO(logger_, "Switched hardware control mode to %s", hardware_control_mode_name(control_mode_));
+}
+
+void EasyArmHardware::reset_command_filters_to_current_state()
+{
+  for (size_t i = 0; i < joint_configs_.size(); ++i) {
+    smoothed_positions_[i] = hw_positions_[i];
+    smoothed_velocities_[i] = 0.0;
+    smoothed_accelerations_[i] = 0.0;
+    last_cmd_positions_[i] = hw_positions_[i];
+    filtered_cmd_velocities_[i] = 0.0;
+    velocity_ff_stage2_[i] = 0.0;
+    vel_ma_buffer_[i] = {0.0, 0.0, 0.0, 0.0};
+    vel_ma_idx_[i] = 0;
+    velocity_settle_counter_[i] = 0;
+  }
 }
 
 bool EasyArmHardware::switch_motor_mode(MotorControlMode mode)

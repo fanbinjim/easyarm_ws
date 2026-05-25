@@ -11,7 +11,12 @@
                 <param name="use_mock_hardware">false</param>
                 <param name="urdf_path">${urdf_path}</param>
                 <param name="enable_gravity_compensation">true</param>
+                <param name="hardware_control_mode">position</param>
                 <param name="gravity_compensation_scale">1.0</param>
+                <param name="idle_kd">4.0</param>
+                <param name="drag_gravity_scale">0.8</param>
+                <param name="drag_kd">1.0</param>
+                <param name="control_torque_limit_scale">0.5</param>
                 <param name="position_kp">100.0</param>
                 <param name="position_kd">4.0</param>
                 <param name="velocity_limit">10.0</param>

@@ -1,8 +1,10 @@
 #pragma once
 
+#include <atomic>
 #include <array>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "easyarm_dynamics/robot_model.hpp"
@@ -12,8 +14,11 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "robstride_can/robstride_can_driver.hpp"
+#include "rclcpp/executors/single_threaded_executor.hpp"
 #include "rclcpp/logger.hpp"
 #include "rclcpp/macros.hpp"
+#include "rclcpp/node.hpp"
+#include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
 namespace easyarm_hardware
@@ -27,6 +32,13 @@ enum class MotorControlMode
 {
   MotionControl,
   PositionCsp
+};
+
+enum class ControlMode
+{
+  Idle = 0,
+  Position = 1,
+  Drag = 2
 };
 
 struct JointConfig
@@ -76,10 +88,20 @@ private:
   bool has_interface(const std::vector<hardware_interface::InterfaceInfo> & interfaces, const std::string & name) const;
   MotorControlMode parse_control_mode(const std::string & value) const;
   const char * control_mode_name(MotorControlMode mode) const;
+  ControlMode parse_hardware_control_mode(const std::string & value) const;
+  bool try_parse_hardware_control_mode(const std::string & value, ControlMode & mode) const;
+  const char * hardware_control_mode_name(ControlMode mode) const;
   MotorType parse_motor_type(const std::string & value) const;
   uint8_t parse_u8_parameter(const std::string & value, uint8_t default_value) const;
   double parse_double_parameter(const std::string & value, double default_value) const;
   bool parse_bool_parameter(const std::string & value, bool default_value) const;
+  void start_control_mode_node();
+  void stop_control_mode_node();
+  rcl_interfaces::msg::SetParametersResult on_control_mode_parameters(
+    const std::vector<rclcpp::Parameter> & parameters);
+  bool request_control_mode(ControlMode mode, std::string & message);
+  void apply_requested_control_mode();
+  void reset_command_filters_to_current_state();
   bool switch_motor_mode(MotorControlMode mode);
   void sync_states_to_commands();
   void send_damping_before_disable();
@@ -113,9 +135,20 @@ private:
   double control_period_{0.005};
   bool enable_gravity_compensation_{false};
   double gravity_compensation_scale_{1.0};
+  double idle_kd_{4.0};
+  double drag_gravity_scale_{1.0};
+  double drag_kd_{1.0};
+  double control_torque_limit_scale_{0.5};
   bool use_mock_hardware_{false};
   MotorControlMode desired_motor_mode_{MotorControlMode::MotionControl};
   MotorControlMode active_motor_mode_{MotorControlMode::MotionControl};
+  ControlMode control_mode_{ControlMode::Position};
+  std::atomic<int> requested_control_mode_{static_cast<int>(ControlMode::Position)};
+
+  rclcpp::Node::SharedPtr control_mode_node_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr control_mode_param_callback_;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> control_mode_executor_;
+  std::thread control_mode_executor_thread_;
 
   std::vector<double> smoothed_positions_;
   std::vector<double> smoothed_velocities_;
