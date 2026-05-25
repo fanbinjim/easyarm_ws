@@ -13,6 +13,7 @@
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>easyarm_dynamics</depend>
   <depend>robstride_can</depend>
 
   <test_depend>ament_lint_auto</test_depend>

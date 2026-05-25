@@ -1,14 +1,18 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="EasyARM-A1">
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+    <xacro:arg name="easyarm_urdf_path" default="$(find easyarm_description)/urdf/easyarm_a1_h0521.urdf" />
 
     <!-- Import EasyARM-A1 urdf file -->
-    <xacro:include filename="$(find easyarm_description)/urdf/easyarm_a1_h0521.urdf" />
+    <xacro:include filename="$(arg easyarm_urdf_path)" />
 
     <!-- Import control_xacro -->
     <xacro:include filename="EasyARM-A1.ros2_control.xacro" />
 
 
-    <xacro:EasyARM-A1_ros2_control name="EasyArmHardware" initial_positions_file="$(arg initial_positions_file)"/>
+    <xacro:EasyARM-A1_ros2_control
+        name="EasyArmHardware"
+        initial_positions_file="$(arg initial_positions_file)"
+        urdf_path="$(arg easyarm_urdf_path)"/>
 
 </robot>

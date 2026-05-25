@@ -47,7 +47,18 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
     velocity_limit_ = parse_double_parameter(params.at("velocity_limit"), velocity_limit_);
   }
   if (params.count("use_mock_hardware")) {
-    use_mock_hardware_ = params.at("use_mock_hardware") == "true" || params.at("use_mock_hardware") == "1";
+    use_mock_hardware_ = parse_bool_parameter(params.at("use_mock_hardware"), use_mock_hardware_);
+  }
+  if (params.count("urdf_path")) {
+    urdf_path_ = params.at("urdf_path");
+  }
+  if (params.count("enable_gravity_compensation")) {
+    enable_gravity_compensation_ = parse_bool_parameter(
+      params.at("enable_gravity_compensation"), enable_gravity_compensation_);
+  }
+  if (params.count("gravity_compensation_scale")) {
+    gravity_compensation_scale_ = std::clamp(
+      parse_double_parameter(params.at("gravity_compensation_scale"), gravity_compensation_scale_), 0.0, 1.0);
   }
   if (params.count("control_mode")) {
     desired_motor_mode_ = parse_control_mode(params.at("control_mode"));
@@ -87,6 +98,8 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
   vel_ma_buffer_.assign(num_joints, {0.0, 0.0, 0.0, 0.0});
   vel_ma_idx_.assign(num_joints, 0);
   velocity_settle_counter_.assign(num_joints, 0);
+  gravity_positions_.setZero(static_cast<Eigen::Index>(num_joints));
+  gravity_torques_.setZero(static_cast<Eigen::Index>(num_joints));
 
   for (size_t i = 0; i < num_joints; ++i) {
     for (const auto & state_interface : info_.joints[i].state_interfaces) {
@@ -109,6 +122,12 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
     position_kd_,
     velocity_limit_,
     use_mock_hardware_ ? "true" : "false");
+  RCLCPP_INFO(
+    logger_,
+    "Gravity compensation: enabled=%s, scale=%.2f, urdf=%s",
+    enable_gravity_compensation_ ? "true" : "false",
+    gravity_compensation_scale_,
+    urdf_path_.empty() ? "<empty>" : urdf_path_.c_str());
   RCLCPP_INFO(logger_, "Desired motor control mode: %s", control_mode_name(desired_motor_mode_));
 
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -189,6 +208,41 @@ bool EasyArmHardware::parse_joint_config(const hardware_interface::HardwareInfo 
 
 hardware_interface::CallbackReturn EasyArmHardware::on_configure(const rclcpp_lifecycle::State &)
 {
+  robot_model_.reset();
+  if (enable_gravity_compensation_) {
+    if (urdf_path_.empty()) {
+      RCLCPP_ERROR(logger_, "Gravity compensation enabled but urdf_path is empty");
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+
+    try {
+      robot_model_ = std::make_unique<easyarm_dynamics::RobotModel>(urdf_path_);
+    } catch (const std::exception & exception) {
+      RCLCPP_ERROR(logger_, "Failed to load dynamics model: %s", exception.what());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+
+    const auto expected_size = static_cast<Eigen::Index>(joint_configs_.size());
+    if (robot_model_->nq() != expected_size || robot_model_->nv() != expected_size) {
+      RCLCPP_ERROR(
+        logger_,
+        "Dynamics model size mismatch: joints=%zu, nq=%ld, nv=%ld",
+        joint_configs_.size(),
+        static_cast<long>(robot_model_->nq()),
+        static_cast<long>(robot_model_->nv()));
+      robot_model_.reset();
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+
+    gravity_positions_.setZero(robot_model_->nq());
+    gravity_torques_.setZero(robot_model_->nv());
+    RCLCPP_INFO(logger_, "Dynamics model loaded for gravity compensation");
+
+    if (desired_motor_mode_ == MotorControlMode::PositionCsp) {
+      RCLCPP_WARN(logger_, "Gravity compensation is ignored in position_csp mode");
+    }
+  }
+
   if (use_mock_hardware_) {
     RCLCPP_INFO(logger_, "Mock hardware configured, skip CAN init");
     return hardware_interface::CallbackReturn::SUCCESS;
@@ -214,6 +268,7 @@ hardware_interface::CallbackReturn EasyArmHardware::on_configure(const rclcpp_li
 hardware_interface::CallbackReturn EasyArmHardware::on_cleanup(const rclcpp_lifecycle::State &)
 {
   active_motor_mode_ = MotorControlMode::MotionControl;
+  robot_model_.reset();
   if (can_driver_) {
     can_driver_->stopReceiveThread();
     can_driver_->close();
@@ -457,6 +512,25 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
 
   auto write_deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(4500);
 
+  bool use_gravity_torque = enable_gravity_compensation_ && robot_model_ &&
+    active_motor_mode_ == MotorControlMode::MotionControl;
+  if (use_gravity_torque) {
+    for (size_t i = 0; i < joint_configs_.size(); ++i) {
+      gravity_positions_[static_cast<Eigen::Index>(i)] = hw_positions_[i];
+    }
+
+    try {
+      gravity_torques_ = robot_model_->gravity(gravity_positions_);
+      gravity_torques_ *= gravity_compensation_scale_;
+    } catch (const std::exception & exception) {
+      static int gravity_warn_counter = 0;
+      if (gravity_warn_counter++ % 200 == 0) {
+        RCLCPP_WARN(logger_, "Gravity compensation failed: %s", exception.what());
+      }
+      use_gravity_torque = false;
+    }
+  }
+
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     if (std::chrono::steady_clock::now() > write_deadline) {
       static int deadline_warn = 0;
@@ -467,23 +541,30 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
     }
 
     const auto & config = joint_configs_[i];
+
+    // 先在关节空间做机械臂 joint limit 保护，电机侧限幅只作为协议范围保护。
     const double target_position = clamp_joint_position(i, hw_commands_positions_[i]);
 
+    // 对目标位置做一阶平滑，避免上层 position command 突变直接进入电机控制。
     smoothed_positions_[i] = smoothing_alpha_ * target_position + (1.0 - smoothing_alpha_) * smoothed_positions_[i];
 
+    // 由平滑后的位置差分估计 velocity feed-forward。
     double smoothed_velocity = (smoothed_positions_[i] - last_cmd_positions_[i]) / dt;
     last_cmd_positions_[i] = smoothed_positions_[i];
 
+    // 限制相邻周期速度变化量，相当于给速度前馈加加速度约束。
     const double max_velocity_change = max_acceleration_ * dt;
     const double acceleration_delta = smoothed_velocity - smoothed_velocities_[i];
     if (std::abs(acceleration_delta) > max_velocity_change) {
       smoothed_velocity = smoothed_velocities_[i] + max_velocity_change * (acceleration_delta > 0.0 ? 1.0 : -1.0);
     }
 
+    // 限制速度前馈幅值，并记录当前估计加速度。
     smoothed_velocity = std::clamp(smoothed_velocity, -max_velocity_, max_velocity_);
     smoothed_accelerations_[i] = (smoothed_velocity - smoothed_velocities_[i]) / dt;
     smoothed_velocities_[i] = smoothed_velocity;
 
+    // 4 点滑动平均，进一步降低速度前馈的高频抖动。
     vel_ma_buffer_[i][vel_ma_idx_[i]] = smoothed_velocity;
     vel_ma_idx_[i] = (vel_ma_idx_[i] + 1) % 4;
 
@@ -494,6 +575,8 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
     ma_velocity *= 0.25;
 
     double filtered_velocity = std::clamp(ma_velocity, -velocity_limit_, velocity_limit_);
+
+    // 低速死区：接近静止时清零速度前馈，避免微小命令造成电机抖动。
     const bool stopped = std::abs(filtered_velocity) < 0.02;
     if (stopped) {
       if (++velocity_settle_counter_[i] >= 1) {
@@ -505,18 +588,20 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
       velocity_settle_counter_[i] = 0;
     }
 
+    // 两级一阶低通，输出最终发送给电机的 velocity feed-forward。
     constexpr double alpha = 0.18;
     filtered_cmd_velocities_[i] = alpha * filtered_velocity + (1.0 - alpha) * filtered_cmd_velocities_[i];
     velocity_ff_stage2_[i] = alpha * filtered_cmd_velocities_[i] + (1.0 - alpha) * velocity_ff_stage2_[i];
 
     const double motor_position = smoothed_positions_[i] * config.direction + config.position_offset;
     const double motor_velocity = velocity_ff_stage2_[i] * config.direction;
-    const double motor_torque = hw_commands_efforts_[i] * config.direction;
-    const bool allow_position_control = true;
-    const double command_kp = allow_position_control ? 20.0 : 0.0;
+    const double joint_torque = use_gravity_torque ?
+      gravity_torques_[static_cast<Eigen::Index>(i)] : hw_commands_efforts_[i];
+    const double motor_torque = joint_torque * config.direction;
+    const double command_kp = 10.0;
     constexpr double command_kd = 5.0;
-    const double command_velocity = allow_position_control ? motor_velocity : 0.0;
-    const double command_torque = allow_position_control ? motor_torque : 0.0;
+    const double command_velocity = motor_velocity;
+    const double command_torque = motor_torque;
 
     auto motor_params = getMotorParams(config.motor_type);
     const double clamped_motor_position = std::clamp(motor_position, motor_params.p_min, motor_params.p_max);
@@ -524,8 +609,7 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
     // if (write_counter % 200 == 0) {
     //   RCLCPP_INFO(
     //     logger_,
-    //     "write() %s command joint=%s motor_id=%u type=%s pos=%.6f vel=%.6f kp=%.3f kd=%.3f torque=%.6f",
-    //     allow_position_control ? "position" : "damping",
+    //     "write() command joint=%s motor_id=%u type=%s pos=%.6f vel=%.6f kp=%.3f kd=%.3f torque=%.6f",
     //     config.name.c_str(),
     //     config.motor_id,
     //     motorTypeName(config.motor_type),
@@ -632,6 +716,17 @@ double EasyArmHardware::parse_double_parameter(const std::string & value, double
   } catch (const std::exception &) {
     return default_value;
   }
+}
+
+bool EasyArmHardware::parse_bool_parameter(const std::string & value, bool default_value) const
+{
+  if (value == "true" || value == "1" || value == "TRUE" || value == "True") {
+    return true;
+  }
+  if (value == "false" || value == "0" || value == "FALSE" || value == "False") {
+    return false;
+  }
+  return default_value;
 }
 
 bool EasyArmHardware::switch_motor_mode(MotorControlMode mode)

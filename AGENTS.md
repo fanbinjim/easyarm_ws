@@ -21,11 +21,11 @@
 ## 常用命令
 
 - 列出包：`colcon list`
-- 按依赖顺序构建全部包：`colcon build --packages-select robstride_can easyarm_description easyarm_hardware easyarm_dynamics easyarm_a1_moveit_config`
+- 按依赖顺序构建全部包：`colcon build`（等价于 `colcon build --packages-up-to easyarm_a1_moveit_config`）
 - 构建单个包：`colcon build --packages-select <package>`
 - 构建后在 workspace 根目录加载 overlay：`source install/setup.bash`
-- 运行单包 lint/tests：`colcon test --packages-select <package> && colcon test-result --verbose`
-- 仓库内没有本地 unit test 目录；`BUILD_TESTING` 目前只为 `robstride_can`、`easyarm_hardware`、`easyarm_dynamics` 添加 `ament_lint_auto` 检查。
+- 运行 lint（需要先 `colcon build --cmake-args -DBUILD_TESTING=ON`）：`colcon test --packages-select <package> && colcon test-result --verbose`
+- 仓库内没有本地 unit test 目录；`BUILD_TESTING` 目前只为 `robstride_can`、`easyarm_hardware`、`easyarm_dynamics` 添加 `ament_lint_auto` + `ament_lint_common` 检查。
 
 ## 硬件安全
 

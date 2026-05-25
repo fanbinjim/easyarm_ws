@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "easyarm_dynamics/robot_model.hpp"
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
 #include "hardware_interface/system_interface.hpp"
@@ -78,6 +79,7 @@ private:
   MotorType parse_motor_type(const std::string & value) const;
   uint8_t parse_u8_parameter(const std::string & value, uint8_t default_value) const;
   double parse_double_parameter(const std::string & value, double default_value) const;
+  bool parse_bool_parameter(const std::string & value, bool default_value) const;
   bool switch_motor_mode(MotorControlMode mode);
   void sync_states_to_commands();
   void send_damping_before_disable();
@@ -86,8 +88,10 @@ private:
   rclcpp::Logger logger_{rclcpp::get_logger("easyarm_hardware")};
 
   std::unique_ptr<RobstrideCanDriver> can_driver_;
+  std::unique_ptr<easyarm_dynamics::RobotModel> robot_model_;
   std::string can_interface_{"can0"};
   uint8_t host_can_id_{0xFD};
+  std::string urdf_path_;
 
   std::vector<JointConfig> joint_configs_;
 
@@ -107,6 +111,8 @@ private:
   double max_velocity_{2.0};
   double max_acceleration_{8.0};
   double control_period_{0.005};
+  bool enable_gravity_compensation_{false};
+  double gravity_compensation_scale_{1.0};
   bool use_mock_hardware_{false};
   MotorControlMode desired_motor_mode_{MotorControlMode::MotionControl};
   MotorControlMode active_motor_mode_{MotorControlMode::MotionControl};
@@ -120,6 +126,9 @@ private:
   std::vector<std::array<double, 4>> vel_ma_buffer_;
   std::vector<int> vel_ma_idx_;
   std::vector<int> velocity_settle_counter_;
+
+  Eigen::VectorXd gravity_positions_;
+  Eigen::VectorXd gravity_torques_;
 };
 
 }  // namespace easyarm_hardware
