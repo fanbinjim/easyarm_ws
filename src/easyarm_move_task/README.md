@@ -30,6 +30,70 @@ ros2 run easyarm_move_task switch_controller_mode DRAG
 | POSITION | 10.0 | 5.0 | velocity ff | gravity(q) * scale |
 | DRAG | 0 | drag_kd | 0 | gravity(q) * scale |
 
+### easyarm_record
+
+位姿录入工具。启动后自动将 hardware 切换到 `DRAG` 模式，按空格开始以 50Hz 录制 `Joint1`-`Joint6` 的关节角和末端位姿，再次按空格结束录制并保存 JSON。录制结束后保持 `DRAG` 模式。
+
+```bash
+ros2 run easyarm_move_task easyarm_record
+ros2 run easyarm_move_task easyarm_record my_pose_record.json
+```
+
+默认输出到当前 workspace 的 `data/<YYYYMMDD>/<HH-MM-SS>.json`，例如 `data/20260525/14-30-05.json`。关节角单位为 `rad`，末端平移单位为 `m`，旋转为四元数 `[x, y, z, w]`。
+
+默认通过 TF 记录 `base_link -> Link6`，可通过参数修改：
+
+```bash
+ros2 run easyarm_move_task easyarm_record my_pose_record.json --ros-args -p base_frame:=base_link -p end_effector_frame:=Link6
+```
+
+JSON 顶层 `ee_frame` 保存末端 frame 名称。每个样本中的 `joints` 数组按 `joint_names` 顺序保存 6 个关节角，`ee_pose` 保存末端位姿。
+
+### easyarm_replay_rviz.py
+
+将 `easyarm_record` 录制的 JSON 转换为 MoveIt `DisplayTrajectory`，发布到 `/display_planned_path`，用于在 MoveIt RViz 里显示黄色规划轨迹。该工具不切换 hardware 模式，不控制真实机械臂。
+
+```bash
+ros2 run easyarm_move_task easyarm_replay_rviz data/20260525/14-30-05.json
+```
+
+使用前先打开 MoveIt RViz，例如：
+
+```bash
+ros2 launch easyarm_a1_moveit_config demo.launch.py
+```
+
+### easyarm_playback
+
+真机交互播放 `easyarm_record` 录制的 JSON。启动后先发送当前点 hold trajectory，再切换到 `POSITION`，慢速运动到录制起始点并默认暂停。该工具会控制真实机械臂，运行前必须确认硬件和工作空间安全。
+
+```bash
+ros2 run easyarm_move_task easyarm_playback data/20260525/19-50-13.json
+```
+
+默认需要输入 `yes` 确认后才会执行。可选参数示例：
+
+```bash
+ros2 run easyarm_move_task easyarm_playback data/20260525/19-50-13.json --ros-args -p speed_scale:=0.5 -p approach_velocity:=0.2
+```
+
+播放结束后自动回到起始点并重复播放：
+
+```bash
+ros2 run easyarm_move_task easyarm_playback data/20260525/19-50-13.json --ros-args -p autorepeat:=true
+```
+
+按键控制：
+
+| 按键 | 行为 |
+|------|------|
+| 空格 | 播放 / 暂停 |
+| 右方向键 | 暂停时运动到下一个采样点 |
+| 左方向键 | 暂停时运动到上一个采样点 |
+| q | hold 当前点并退出 |
+
+播放结束后暂停在最后一个点，保持 `POSITION` 模式。
+
 ### safe_shutdown_demo.sh
 
 安全关机脚本：先 `move_to_ready`，再停 `arm_controller`、禁用 hardware，最后终止 demo 进程树。
