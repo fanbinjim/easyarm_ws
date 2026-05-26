@@ -22,8 +22,12 @@ add_executable(move_to_ready src/move_to_ready.cpp)
 target_include_directories(move_to_ready PRIVATE include/${PROJECT_NAME})
 ament_target_dependencies(
   move_to_ready
+  control_msgs
   moveit_ros_planning_interface
-  rclcpp)
+  rclcpp
+  rclcpp_action
+  sensor_msgs
+  trajectory_msgs)
 
 add_executable(switch_controller_mode src/switch_controller_mode.cpp)
 target_include_directories(switch_controller_mode PRIVATE include/${PROJECT_NAME})

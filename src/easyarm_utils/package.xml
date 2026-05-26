@@ -7,7 +7,15 @@
   <maintainer email="fanbinjim@qq.com">linx</maintainer>
   <license>Apache-2.0</license>
 
+  <depend>builtin_interfaces</depend>
+  <depend>control_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>moveit_msgs</depend>
+  <depend>rcl_interfaces</depend>
   <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>trajectory_msgs</depend>
 
   <exec_depend>python3-matplotlib</exec_depend>
 
