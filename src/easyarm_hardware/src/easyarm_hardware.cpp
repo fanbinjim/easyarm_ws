@@ -660,8 +660,8 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
       gravity_torques_[static_cast<Eigen::Index>(i)] * gravity_compensation_scale_ : hw_commands_efforts_[i];
     const double max_torque = motor_params.t_max * control_torque_limit_scale_;
     const double motor_torque = std::clamp(joint_torque * config.direction, -max_torque, max_torque);
-    const double command_kp = 10.0;
-    constexpr double command_kd = 5.0;
+    const double command_kp = 80.0;
+    constexpr double command_kd = 4.0;
     const double command_velocity = motor_velocity;
     const double command_torque = motor_torque;
 

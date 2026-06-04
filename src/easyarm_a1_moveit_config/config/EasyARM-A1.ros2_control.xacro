@@ -49,7 +49,7 @@
                 <param name="motor_id">0x02</param>
                 <param name="motor_type">RS00</param>
                 <param name="direction">1.0</param>
-                <param name="position_offset">0.0</param>
+                <param name="position_offset">-0.08574035</param>
                 <command_interface name="position">
                     <param name="min">-3.14</param>
                     <param name="max">3.14</param>
@@ -67,7 +67,7 @@
                 <param name="motor_id">0x03</param>
                 <param name="motor_type">RS00</param>
                 <param name="direction">1.0</param>
-                <param name="position_offset">0.0</param>
+                <param name="position_offset">-0.07286958</param>
                 <command_interface name="position">
                     <param name="min">-3.14</param>
                     <param name="max">3.14</param>
@@ -85,7 +85,7 @@
                 <param name="motor_id">0x04</param>
                 <param name="motor_type">RS00</param>
                 <param name="direction">1.0</param>
-                <param name="position_offset">0.0</param>
+                <param name="position_offset">0.02709772</param>
                 <command_interface name="position">
                     <param name="min">-3.14</param>
                     <param name="max">3.14</param>
