@@ -12,11 +12,14 @@ find_package(ament_cmake REQUIRED)
 find_package(Threads REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
+  src/driver_factory.cpp
   src/easyarm_can.cpp
   src/encoding.cpp
+  src/jxservo/jxservo_driver.cpp
   src/model_registry.cpp
-  src/protocols.cpp
   src/socket_can_transport.cpp
+  src/ti5robot/ti5robot_driver.cpp
+  src/xhumanoid/xhumanoid_driver.cpp
 )
 
 target_include_directories(${PROJECT_NAME}

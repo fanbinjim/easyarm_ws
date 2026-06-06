@@ -7,8 +7,8 @@
 #include <sstream>
 #include <thread>
 
+#include "easyarm_can/driver_factory.hpp"
 #include "easyarm_can/model_registry.hpp"
-#include "easyarm_can/protocols.hpp"
 #include "easyarm_can/socket_can_transport.hpp"
 
 namespace easyarm_can
@@ -20,9 +20,9 @@ public:
   Impl(const std::string & can_interface, uint8_t host_can_id)
   : host_can_id_(host_can_id), transport_(can_interface)
   {
-    protocols_[Vendor::Jxservo] = createProtocol(Vendor::Jxservo, transport_, host_can_id_);
-    protocols_[Vendor::Ti5robot] = createProtocol(Vendor::Ti5robot, transport_, host_can_id_);
-    protocols_[Vendor::Xhumanoid] = createProtocol(Vendor::Xhumanoid, transport_, host_can_id_);
+    drivers_[Vendor::Jxservo] = createMotorDriver(Vendor::Jxservo, transport_, host_can_id_);
+    drivers_[Vendor::Ti5robot] = createMotorDriver(Vendor::Ti5robot, transport_, host_can_id_);
+    drivers_[Vendor::Xhumanoid] = createMotorDriver(Vendor::Xhumanoid, transport_, host_can_id_);
   }
 
   ~Impl()
@@ -60,14 +60,14 @@ public:
       return false;
     }
 
-    auto protocol = protocolFor(model.vendor);
-    if (!protocol) {
+    auto driver = driverFor(model.vendor);
+    if (!driver) {
       setError("unsupported motor vendor for model: " + config.model);
       return false;
     }
 
-    if (!protocol->configure(config.motor_id, model)) {
-      setError(protocol->lastError());
+    if (!driver->configure(config.motor_id, model)) {
+      setError(driver->lastError());
       return false;
     }
 
@@ -89,36 +89,36 @@ public:
 
   bool clearFault(uint8_t motor_id)
   {
-    return dispatch(motor_id, [](MotorProtocol & protocol, uint8_t id) {
-      return protocol.clearFault(id);
+    return dispatch(motor_id, [](MotorDriver & driver, uint8_t id) {
+      return driver.clearFault(id);
     });
   }
 
   bool enterHybridMode(uint8_t motor_id)
   {
-    return dispatch(motor_id, [](MotorProtocol & protocol, uint8_t id) {
-      return protocol.enterHybridMode(id);
+    return dispatch(motor_id, [](MotorDriver & driver, uint8_t id) {
+      return driver.enterHybridMode(id);
     });
   }
 
   bool enableMotor(uint8_t motor_id)
   {
-    return dispatch(motor_id, [](MotorProtocol & protocol, uint8_t id) {
-      return protocol.enableMotor(id);
+    return dispatch(motor_id, [](MotorDriver & driver, uint8_t id) {
+      return driver.enableMotor(id);
     });
   }
 
   bool disableMotor(uint8_t motor_id)
   {
-    return dispatch(motor_id, [](MotorProtocol & protocol, uint8_t id) {
-      return protocol.disableMotor(id);
+    return dispatch(motor_id, [](MotorDriver & driver, uint8_t id) {
+      return driver.disableMotor(id);
     });
   }
 
   bool sendHybridControl(uint8_t motor_id, const HybridCommand & command)
   {
-    return dispatch(motor_id, [&command](MotorProtocol & protocol, uint8_t id) {
-      return protocol.sendHybridControl(id, command);
+    return dispatch(motor_id, [&command](MotorDriver & driver, uint8_t id) {
+      return driver.sendHybridControl(id, command);
     });
   }
 
@@ -166,11 +166,11 @@ public:
       return {};
     }
 
-    const auto protocol_it = protocols_.find(vendor_it->second);
-    if (protocol_it == protocols_.end() || !protocol_it->second) {
+    const auto driver_it = drivers_.find(vendor_it->second);
+    if (driver_it == drivers_.end() || !driver_it->second) {
       return {};
     }
-    return protocol_it->second->capabilities();
+    return driver_it->second->capabilities();
   }
 
   std::string lastError() const
@@ -183,38 +183,38 @@ public:
   }
 
 private:
-  MotorProtocol * protocolFor(Vendor vendor)
+  MotorDriver * driverFor(Vendor vendor)
   {
-    const auto it = protocols_.find(vendor);
-    if (it != protocols_.end() && it->second) {
+    const auto it = drivers_.find(vendor);
+    if (it != drivers_.end() && it->second) {
       return it->second.get();
     }
     return nullptr;
   }
 
-  MotorProtocol * protocolForMotor(uint8_t motor_id)
+  MotorDriver * driverForMotor(uint8_t motor_id)
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = motor_vendors_.find(motor_id);
     if (it == motor_vendors_.end()) {
       return nullptr;
     }
-    return protocolFor(it->second);
+    return driverFor(it->second);
   }
 
   template<typename Callback>
   bool dispatch(uint8_t motor_id, Callback callback)
   {
-    auto * protocol = protocolForMotor(motor_id);
-    if (!protocol) {
+    auto * driver = driverForMotor(motor_id);
+    if (!driver) {
       std::ostringstream oss;
       oss << "motor " << static_cast<int>(motor_id) << " is not configured";
       setError(oss.str());
       return false;
     }
 
-    if (!callback(*protocol, motor_id)) {
-      setError(protocol->lastError());
+    if (!callback(*driver, motor_id)) {
+      setError(driver->lastError());
       return false;
     }
     return true;
@@ -228,7 +228,7 @@ private:
         continue;
       }
 
-      for (auto & item : protocols_) {
+      for (auto & item : drivers_) {
         MotorFeedback feedback;
         if (item.second && item.second->parseFeedback(frame, feedback)) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -249,7 +249,7 @@ private:
   SocketCanTransport transport_;
   mutable std::mutex mutex_;
   mutable std::mutex error_mutex_;
-  std::map<Vendor, std::unique_ptr<MotorProtocol>> protocols_;
+  std::map<Vendor, std::unique_ptr<MotorDriver>> drivers_;
   std::map<uint8_t, Vendor> motor_vendors_;
   std::map<uint8_t, MotorModel> motor_models_;
   std::map<uint8_t, MotorFeedback> feedbacks_;
