@@ -1,0 +1,348 @@
+#include "easyarm_can/easyarm_can.hpp"
+
+#include <atomic>
+#include <chrono>
+#include <map>
+#include <mutex>
+#include <sstream>
+#include <thread>
+
+#include "easyarm_can/model_registry.hpp"
+#include "easyarm_can/protocols.hpp"
+#include "easyarm_can/socket_can_transport.hpp"
+
+namespace easyarm_can
+{
+
+class EasyArmCan::Impl
+{
+public:
+  Impl(const std::string & can_interface, uint8_t host_can_id)
+  : host_can_id_(host_can_id), transport_(can_interface)
+  {
+    protocols_[Vendor::Jxservo] = createProtocol(Vendor::Jxservo, transport_, host_can_id_);
+    protocols_[Vendor::Ti5robot] = createProtocol(Vendor::Ti5robot, transport_, host_can_id_);
+    protocols_[Vendor::Xhumanoid] = createProtocol(Vendor::Xhumanoid, transport_, host_can_id_);
+  }
+
+  ~Impl()
+  {
+    stopReceiveThread();
+    transport_.close();
+  }
+
+  bool init()
+  {
+    return transport_.init(true);
+  }
+
+  void close()
+  {
+    stopReceiveThread();
+    transport_.close();
+  }
+
+  bool isConnected() const
+  {
+    return transport_.isConnected();
+  }
+
+  void setVerbose(bool verbose)
+  {
+    transport_.setVerbose(verbose);
+  }
+
+  bool configureMotor(const MotorConfig & config)
+  {
+    MotorModel model;
+    if (!lookupMotorModel(config.model, model)) {
+      setError("unknown motor model: " + config.model);
+      return false;
+    }
+
+    auto protocol = protocolFor(model.vendor);
+    if (!protocol) {
+      setError("unsupported motor vendor for model: " + config.model);
+      return false;
+    }
+
+    if (!protocol->configure(config.motor_id, model)) {
+      setError(protocol->lastError());
+      return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    motor_vendors_[config.motor_id] = model.vendor;
+    motor_models_[config.motor_id] = model;
+    return true;
+  }
+
+  bool configureMotors(const std::vector<MotorConfig> & configs)
+  {
+    for (const auto & config : configs) {
+      if (!configureMotor(config)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool clearFault(uint8_t motor_id)
+  {
+    return dispatch(motor_id, [](MotorProtocol & protocol, uint8_t id) {
+      return protocol.clearFault(id);
+    });
+  }
+
+  bool enterHybridMode(uint8_t motor_id)
+  {
+    return dispatch(motor_id, [](MotorProtocol & protocol, uint8_t id) {
+      return protocol.enterHybridMode(id);
+    });
+  }
+
+  bool enableMotor(uint8_t motor_id)
+  {
+    return dispatch(motor_id, [](MotorProtocol & protocol, uint8_t id) {
+      return protocol.enableMotor(id);
+    });
+  }
+
+  bool disableMotor(uint8_t motor_id)
+  {
+    return dispatch(motor_id, [](MotorProtocol & protocol, uint8_t id) {
+      return protocol.disableMotor(id);
+    });
+  }
+
+  bool sendHybridControl(uint8_t motor_id, const HybridCommand & command)
+  {
+    return dispatch(motor_id, [&command](MotorProtocol & protocol, uint8_t id) {
+      return protocol.sendHybridControl(id, command);
+    });
+  }
+
+  MotorFeedback getMotorFeedback(uint8_t motor_id) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = feedbacks_.find(motor_id);
+    if (it != feedbacks_.end()) {
+      return it->second;
+    }
+
+    MotorFeedback feedback;
+    feedback.motor_id = motor_id;
+    feedback.is_valid = false;
+    return feedback;
+  }
+
+  void startReceiveThread()
+  {
+    if (receive_running_) {
+      return;
+    }
+    receive_running_ = true;
+    receive_thread_ = std::thread([this]() {
+      receiveLoop();
+    });
+  }
+
+  void stopReceiveThread()
+  {
+    if (!receive_running_) {
+      return;
+    }
+    receive_running_ = false;
+    if (receive_thread_.joinable()) {
+      receive_thread_.join();
+    }
+  }
+
+  ProtocolCapabilities capabilities(uint8_t motor_id) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto vendor_it = motor_vendors_.find(motor_id);
+    if (vendor_it == motor_vendors_.end()) {
+      return {};
+    }
+
+    const auto protocol_it = protocols_.find(vendor_it->second);
+    if (protocol_it == protocols_.end() || !protocol_it->second) {
+      return {};
+    }
+    return protocol_it->second->capabilities();
+  }
+
+  std::string lastError() const
+  {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    if (!last_error_.empty()) {
+      return last_error_;
+    }
+    return transport_.lastError();
+  }
+
+private:
+  MotorProtocol * protocolFor(Vendor vendor)
+  {
+    const auto it = protocols_.find(vendor);
+    if (it != protocols_.end() && it->second) {
+      return it->second.get();
+    }
+    return nullptr;
+  }
+
+  MotorProtocol * protocolForMotor(uint8_t motor_id)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = motor_vendors_.find(motor_id);
+    if (it == motor_vendors_.end()) {
+      return nullptr;
+    }
+    return protocolFor(it->second);
+  }
+
+  template<typename Callback>
+  bool dispatch(uint8_t motor_id, Callback callback)
+  {
+    auto * protocol = protocolForMotor(motor_id);
+    if (!protocol) {
+      std::ostringstream oss;
+      oss << "motor " << static_cast<int>(motor_id) << " is not configured";
+      setError(oss.str());
+      return false;
+    }
+
+    if (!callback(*protocol, motor_id)) {
+      setError(protocol->lastError());
+      return false;
+    }
+    return true;
+  }
+
+  void receiveLoop()
+  {
+    canfd_frame frame;
+    while (receive_running_) {
+      if (!transport_.receive(frame, 10)) {
+        continue;
+      }
+
+      for (auto & item : protocols_) {
+        MotorFeedback feedback;
+        if (item.second && item.second->parseFeedback(frame, feedback)) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          feedbacks_[feedback.motor_id] = feedback;
+          break;
+        }
+      }
+    }
+  }
+
+  void setError(const std::string & message)
+  {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_ = message;
+  }
+
+  uint8_t host_can_id_;
+  SocketCanTransport transport_;
+  mutable std::mutex mutex_;
+  mutable std::mutex error_mutex_;
+  std::map<Vendor, std::unique_ptr<MotorProtocol>> protocols_;
+  std::map<uint8_t, Vendor> motor_vendors_;
+  std::map<uint8_t, MotorModel> motor_models_;
+  std::map<uint8_t, MotorFeedback> feedbacks_;
+  std::string last_error_;
+  std::atomic<bool> receive_running_{false};
+  std::thread receive_thread_;
+};
+
+EasyArmCan::EasyArmCan(const std::string & can_interface, uint8_t host_can_id)
+: impl_(std::make_unique<Impl>(can_interface, host_can_id))
+{
+}
+
+EasyArmCan::~EasyArmCan() = default;
+
+bool EasyArmCan::init()
+{
+  return impl_->init();
+}
+
+void EasyArmCan::close()
+{
+  impl_->close();
+}
+
+bool EasyArmCan::isConnected() const
+{
+  return impl_->isConnected();
+}
+
+void EasyArmCan::setVerbose(bool verbose)
+{
+  impl_->setVerbose(verbose);
+}
+
+bool EasyArmCan::configureMotor(const MotorConfig & config)
+{
+  return impl_->configureMotor(config);
+}
+
+bool EasyArmCan::configureMotors(const std::vector<MotorConfig> & configs)
+{
+  return impl_->configureMotors(configs);
+}
+
+bool EasyArmCan::clearFault(uint8_t motor_id)
+{
+  return impl_->clearFault(motor_id);
+}
+
+bool EasyArmCan::enterHybridMode(uint8_t motor_id)
+{
+  return impl_->enterHybridMode(motor_id);
+}
+
+bool EasyArmCan::enableMotor(uint8_t motor_id)
+{
+  return impl_->enableMotor(motor_id);
+}
+
+bool EasyArmCan::disableMotor(uint8_t motor_id)
+{
+  return impl_->disableMotor(motor_id);
+}
+
+bool EasyArmCan::sendHybridControl(uint8_t motor_id, const HybridCommand & command)
+{
+  return impl_->sendHybridControl(motor_id, command);
+}
+
+MotorFeedback EasyArmCan::getMotorFeedback(uint8_t motor_id) const
+{
+  return impl_->getMotorFeedback(motor_id);
+}
+
+void EasyArmCan::startReceiveThread()
+{
+  impl_->startReceiveThread();
+}
+
+void EasyArmCan::stopReceiveThread()
+{
+  impl_->stopReceiveThread();
+}
+
+ProtocolCapabilities EasyArmCan::capabilities(uint8_t motor_id) const
+{
+  return impl_->capabilities(motor_id);
+}
+
+std::string EasyArmCan::lastError() const
+{
+  return impl_->lastError();
+}
+
+}  // namespace easyarm_can
