@@ -16,7 +16,7 @@ namespace easyarm_can
 
 /**
  * @brief 查找电机型号。
- * @param name 形如 "jxservo_default"、"ti5robot_pro2"、"xhumanoid_55p_35"。
+ * @param name 形如 "jxservo_default"、"ti5robot_pro2"、"xhumanoid_60h_100"。
  * @param model 输出型号配置。
  * @return 找到返回 true。
  */

@@ -1,0 +1,150 @@
+# XHumanoid 电机使用说明
+
+本文记录 `easyarm_can` 中 XHumanoid/HRA 关节模组的当前使用方法。协议依据主要来自
+`src/easyarm_can/ref/xhumanoid/CAN协议说明E_V1.2.pdf`、厂家示例代码，以及本仓库现场
+测试记录。
+
+## 1. 协议和硬件行为
+
+- 通信类型：CAN 2.0B 标准帧。
+- 波特率：`1Mbps`。
+- DLC：固定 `8` 字节。
+- CAN ID：普通控制和反馈使用关节 ID，例如 `0x001`。
+- 控制方式：XHumanoid 该协议下没有单独的 enable/disable 功能，周期发送控制报文即运动，停止发送即停止。
+- 推荐发送周期：`5ms`。
+- 温度报文：关节约 `1s` 自动上报一次，示例 `A0 0A 00 7B 00 79 7F B3` 表示绕组温度 `36.5 degC`、MOS 温度 `35.5 degC`。
+
+## 2. SocketCAN 配置
+
+真实硬件测试前先配置 `can0`：
+
+```bash
+sudo ip link set can0 down
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+```
+
+查看总线报文：
+
+```bash
+candump can0
+```
+
+## 3. 手工 cangen 测试
+
+速度模式示例，ID 为 `0x001`：
+
+```bash
+cangen can0 -g 5 -I 001 -L 8 -D 413F800000000AFF
+```
+
+力位混合模式示例，`kp=50`、`kd=10`、`q=0`、`dq=0`、`tau=0`：
+
+```bash
+cangen can0 -g 5 -I 001 -L 8 -D 00CC117FFF7FF7FF
+```
+
+力位混合模式示例，`kp=50`、`kd=10`、`q=3.14 rad`、`dq=0`、`tau=0`：
+
+```bash
+cangen can0 -g 5 -I 001 -L 8 -D 00CC11BFFF7FF7FF
+```
+
+## 4. ros2 run 测试程序
+
+构建并加载环境：
+
+```bash
+colcon build --packages-select easyarm_can
+source install/setup.bash
+```
+
+列出内置 XHumanoid 型号：
+
+```bash
+ros2 run easyarm_can test_xhumanoid --list-models
+```
+
+默认 dry-run，不发送 CAN 帧，只打印即将发送的 payload：
+
+```bash
+ros2 run easyarm_can test_xhumanoid --kp 10 --kd 5 --pos 3.14 --vel 0 --torque 0
+```
+
+确认机械限位和方向安全后，加 `--send` 才会周期发送：
+
+```bash
+ros2 run easyarm_can test_xhumanoid \
+  --model xhumanoid_60h_100 \
+  --kp 10 --kd 5 --pos 3.14 --vel 0 --torque 0 \
+  --cycles 1000 --period-ms 5 --send
+```
+
+常用参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--can` | CAN 接口，默认 `can0` |
+| `--id` | 电机 CAN ID，默认 `1` |
+| `--model` | 电机型号，默认 `xhumanoid_60h_100` |
+| `--pos` | 目标位置，单位 `rad` |
+| `--vel` | 目标速度，单位 `rad/s` |
+| `--kp` | 力位混合模式 KP |
+| `--kd` | 力位混合模式 KD |
+| `--torque` | 前馈扭矩，单位 `Nm` |
+| `--cycles` | 发送周期数 |
+| `--period-ms` | 发送周期，默认 `5ms` |
+| `--send` | 真正发送 CAN 帧 |
+
+## 5. 力位混合模式编码范围
+
+当前驱动按 `CAN协议说明E_V1.2.pdf` 的范围编码：
+
+| 字段 | 位宽 | 范围 | 单位 |
+| --- | ---: | --- | --- |
+| `kp` | 12 | `0` ~ `2000` | 协议增益 |
+| `kd` | 9 | `0` ~ `300` | 协议增益 |
+| `q` | 16 | `-6.28` ~ `6.28` | `rad` |
+| `dq` | 12 | `-21` ~ `21` | `rad/s` |
+| `tau` | 12 | `-300` ~ `300` | `Nm` |
+
+量化函数使用厂家示例中的截断方式：
+
+```text
+raw = int((x - x_min) * ((1 << bits) - 1) / (x_max - x_min))
+```
+
+## 6. 反馈解析
+
+驱动解析两类反馈：
+
+- 报文 1：位置、速度、电流。
+- 自动温度报文：绕组温度、MOS 温度。
+
+公共反馈结构 `MotorFeedback` 当前只有一个温度字段，所以温度报文中取绕组和 MOS 的较高值写入 `temperature_deg_c`。
+
+XHumanoid 报文反馈的是电流，驱动用型号表中的 `torque_constant_nm_per_a` 换算为扭矩：
+
+```text
+feedback.torque_nm = current_a * torque_constant_nm_per_a
+```
+
+扭矩系数参考：
+
+```text
+src/easyarm_can/ref/xhumanoid/HRA关节模组扭矩系数及电流计算公式.md
+```
+
+## 7. 代码位置
+
+- 驱动实现：`src/easyarm_can/src/vendors/xhumanoid/xhumanoid_driver.cpp`
+- 测试程序：`src/easyarm_can/example/test_xhumanoid.cpp`
+- 型号表：`src/easyarm_can/src/model_registry.cpp`
+- 协议资料：`src/easyarm_can/ref/xhumanoid/`
+
+## 8. 安全注意事项
+
+- `--send` 会让电机真实运动；发送前确认关节机械限位、方向、负载和急停条件。
+- XHumanoid 没有单独 disable 指令，测试程序结束后靠停止发送控制帧使电机停止。
+- 首次测试建议使用较小 `kp/kd`，并从当前位置附近的小幅 `pos` 开始。
+- 如果反馈扭矩一直为 `0`，先确认 `--model` 是否选择了带有效 `torque_constant_nm_per_a` 的型号。

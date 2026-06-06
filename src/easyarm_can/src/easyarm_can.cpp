@@ -7,6 +7,8 @@
 #include <sstream>
 #include <thread>
 
+#include <linux/can.h>
+
 #include "easyarm_can/driver_factory.hpp"
 #include "easyarm_can/model_registry.hpp"
 #include "easyarm_can/socket_can_transport.hpp"
@@ -228,14 +230,58 @@ private:
         continue;
       }
 
-      for (auto & item : drivers_) {
-        MotorFeedback feedback;
-        if (item.second && item.second->parseFeedback(frame, feedback)) {
-          std::lock_guard<std::mutex> lock(mutex_);
-          feedbacks_[feedback.motor_id] = feedback;
-          break;
+      const uint32_t can_id = frame.can_id & CAN_SFF_MASK;
+      Vendor configured_vendor = Vendor::Unknown;
+      bool has_configured_vendor = false;
+      if (can_id <= 0xFFu) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto vendor_it = motor_vendors_.find(static_cast<uint8_t>(can_id));
+        if (vendor_it != motor_vendors_.end()) {
+          configured_vendor = vendor_it->second;
+          has_configured_vendor = true;
         }
       }
+
+      if (has_configured_vendor) {
+        auto driver = driverFor(configured_vendor);
+        MotorFeedback feedback;
+        if (driver && driver->parseFeedback(frame, feedback)) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          mergeFeedback(feedback);
+        }
+        continue;
+      }
+
+      for (auto & item : drivers_) {
+        MotorFeedback feedback;
+        if (!item.second || !item.second->parseFeedback(frame, feedback)) {
+          continue;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        mergeFeedback(feedback);
+        break;
+      }
+    }
+  }
+
+  void mergeFeedback(const MotorFeedback & feedback)
+  {
+    auto & stored = feedbacks_[feedback.motor_id];
+    if (stored.is_valid && feedback.position_rad == 0.0 && feedback.velocity_rad_s == 0.0 &&
+      feedback.torque_nm == 0.0 && feedback.temperature_deg_c != 0.0)
+    {
+      stored.temperature_deg_c = feedback.temperature_deg_c;
+      stored.fault_code = feedback.fault_code;
+      stored.enabled = feedback.enabled;
+      stored.is_valid = true;
+      stored.last_update = feedback.last_update;
+      return;
+    }
+
+    const double previous_temperature = stored.temperature_deg_c;
+    stored = feedback;
+    if (stored.temperature_deg_c == 0.0 && previous_temperature != 0.0) {
+      stored.temperature_deg_c = previous_temperature;
     }
   }
 

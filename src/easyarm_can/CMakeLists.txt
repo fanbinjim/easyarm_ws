@@ -15,11 +15,11 @@ add_library(${PROJECT_NAME} SHARED
   src/driver_factory.cpp
   src/easyarm_can.cpp
   src/encoding.cpp
-  src/jxservo/jxservo_driver.cpp
   src/model_registry.cpp
   src/socket_can_transport.cpp
-  src/ti5robot/ti5robot_driver.cpp
-  src/xhumanoid/xhumanoid_driver.cpp
+  src/vendors/jxservo/jxservo_driver.cpp
+  src/vendors/ti5robot/ti5robot_driver.cpp
+  src/vendors/xhumanoid/xhumanoid_driver.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -33,12 +33,26 @@ target_link_libraries(${PROJECT_NAME}
     Threads::Threads
 )
 
+add_executable(test_xhumanoid
+  example/test_xhumanoid.cpp
+)
+
+target_link_libraries(test_xhumanoid
+  PRIVATE
+    ${PROJECT_NAME}
+)
+
 install(
   TARGETS ${PROJECT_NAME}
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
+)
+
+install(
+  TARGETS test_xhumanoid
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
 install(

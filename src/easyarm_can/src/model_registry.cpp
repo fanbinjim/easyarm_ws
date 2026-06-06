@@ -53,11 +53,11 @@ MotorModel xhumanoidModel(const char * name, double torque_constant)
   MotorModel model;
   model.name = name;
   model.vendor = Vendor::Xhumanoid;
-  model.limits = makeLimits(3.141592653589793, 50.0, 327.67, 65535.0, 65535.0);
+  model.limits = makeLimits(6.28, 21.0, 300.0, 2000.0, 300.0);
   model.torque_constant_nm_per_a = torque_constant;
-  model.position_unit_degrees_on_bus = true;
-  model.velocity_unit_rpm_on_bus = true;
-  model.torque_ff_raw_int16 = true;
+  model.position_unit_degrees_on_bus = false;
+  model.velocity_unit_rpm_on_bus = false;
+  model.torque_ff_raw_int16 = false;
   return model;
 }
 
@@ -78,6 +78,7 @@ std::vector<MotorModel> makeModels()
     xhumanoidModel("xhumanoid_55h_50", 3.33),
     xhumanoidModel("xhumanoid_55h_100", 5.97),
     xhumanoidModel("xhumanoid_60h_50", 3.25),
+    xhumanoidModel("xhumanoid_60h_100", 6.536),
     xhumanoidModel("xhumanoid_70h_50", 3.456),
     xhumanoidModel("xhumanoid_70h_100", 5.632),
     xhumanoidModel("xhumanoid_80h_51", 3.207),
