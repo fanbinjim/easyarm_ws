@@ -131,6 +131,39 @@ bool XhumanoidDriver::sendHybridControl(uint8_t motor_id, const HybridCommand & 
   return sendCan(motor_id, data, 8);
 }
 
+bool XhumanoidDriver::sendPositionControl(uint8_t motor_id, const PositionCommand & command)
+{
+  if (is_canfd_) {
+    uint8_t data[14] = {};
+    data[0] = 0x12;
+    writeFloatBe(&data[1], static_cast<float>(radToDeg(command.position_rad)));
+    writeFloatBe(&data[5], static_cast<float>(command.velocity_rad_s));
+    writeFloatBe(&data[9], static_cast<float>(command.current_limit_a));
+    data[13] = counters_[motor_id]++;
+    return sendCanFd(motor_id, data, 14);
+  }
+
+  constexpr uint8_t kReportMessage1 = 0x01;
+  const uint16_t velocity_raw = static_cast<uint16_t>(
+    std::lround(clampValue(radPerSecToRpm(command.velocity_rad_s) * 10.0, 0.0, 32767.0)));
+  const uint16_t current_raw = static_cast<uint16_t>(
+    std::lround(clampValue(command.current_limit_a * 10.0, 0.0, 4095.0)));
+
+  uint8_t position_bytes[4] = {};
+  writeFloatBe(position_bytes, static_cast<float>(radToDeg(command.position_rad)));
+
+  uint8_t data[8] = {};
+  data[0] = static_cast<uint8_t>(0x20u | (position_bytes[0] >> 3));
+  data[1] = static_cast<uint8_t>((position_bytes[0] << 5) | (position_bytes[1] >> 3));
+  data[2] = static_cast<uint8_t>((position_bytes[1] << 5) | (position_bytes[2] >> 3));
+  data[3] = static_cast<uint8_t>((position_bytes[2] << 5) | (position_bytes[3] >> 3));
+  data[4] = static_cast<uint8_t>((position_bytes[3] << 5) | (velocity_raw >> 10));
+  data[5] = static_cast<uint8_t>((velocity_raw & 0x03FCu) >> 2);
+  data[6] = static_cast<uint8_t>(((velocity_raw & 0x0003u) << 6) | (current_raw >> 6));
+  data[7] = static_cast<uint8_t>(((current_raw & 0x003Fu) << 2) | kReportMessage1);
+  return sendCan(motor_id, data, 8);
+}
+
 bool XhumanoidDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & feedback)
 {
   const uint32_t can_id = frame.can_id & CAN_SFF_MASK;
@@ -155,7 +188,7 @@ bool XhumanoidDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & f
     const double mos_temp = static_cast<double>(static_cast<int>(frame.data[14]) - 50);
 
     feedback.motor_id = motor_id;
-    feedback.position_rad = readFloatBe(&frame.data[3]);
+    feedback.position_rad = degToRad(readFloatBe(&frame.data[3]));
     feedback.velocity_rad_s = readFloatBe(&frame.data[7]);
     feedback.torque_nm = current_a * model.torque_constant_nm_per_a;
     feedback.temperature_deg_c = std::max(motor_temp, mos_temp);

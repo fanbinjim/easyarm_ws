@@ -61,6 +61,13 @@ bool Ti5robotDriver::sendHybridControl(uint8_t motor_id, const HybridCommand &)
   return false;
 }
 
+bool Ti5robotDriver::sendPositionControl(uint8_t motor_id, const PositionCommand &)
+{
+  (void)motor_id;
+  setError("ti5robot position control is not implemented");
+  return false;
+}
+
 bool Ti5robotDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & feedback)
 {
   const uint32_t can_id = frame.can_id & CAN_SFF_MASK;

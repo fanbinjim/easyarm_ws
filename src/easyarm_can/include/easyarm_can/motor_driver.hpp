@@ -34,6 +34,7 @@ public:
   virtual bool enableMotor(uint8_t motor_id) = 0;
   virtual bool disableMotor(uint8_t motor_id) = 0;
   virtual bool sendHybridControl(uint8_t motor_id, const HybridCommand & command) = 0;
+  virtual bool sendPositionControl(uint8_t motor_id, const PositionCommand & command) = 0;
   virtual bool parseFeedback(const canfd_frame & frame, MotorFeedback & feedback) = 0;
   virtual std::string lastError() const = 0;
 };

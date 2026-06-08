@@ -26,6 +26,7 @@ public:
   bool enableMotor(uint8_t motor_id) override;
   bool disableMotor(uint8_t motor_id) override;
   bool sendHybridControl(uint8_t motor_id, const HybridCommand & command) override;
+  bool sendPositionControl(uint8_t motor_id, const PositionCommand & command) override;
   bool parseFeedback(const canfd_frame & frame, MotorFeedback & feedback) override;
 
 private:

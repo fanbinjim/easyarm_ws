@@ -110,6 +110,19 @@ struct HybridCommand
 };
 
 /**
+ * @brief 位置控制命令。
+ *
+ * 单位：position_rad 为 rad，velocity_rad_s 为 rad/s，current_limit_a 为 A。
+ * velocity_rad_s 在不同厂商协议中可表示位置模式速度目标或速度限制。
+ */
+struct PositionCommand
+{
+  double position_rad{0.0};
+  double velocity_rad_s{0.0};
+  double current_limit_a{0.0};
+};
+
+/**
  * @brief 电机反馈数据。
  *
  * 单位：position_rad 为 rad，velocity_rad_s 为 rad/s，torque_nm 为 Nm，

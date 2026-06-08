@@ -127,6 +127,13 @@ public:
     });
   }
 
+  bool sendPositionControl(uint8_t motor_id, const PositionCommand & command)
+  {
+    return dispatch(motor_id, [&command](MotorDriver & driver, uint8_t id) {
+      return driver.sendPositionControl(id, command);
+    });
+  }
+
   MotorFeedback getMotorFeedback(uint8_t motor_id) const
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -368,6 +375,11 @@ bool EasyArmCan::disableMotor(uint8_t motor_id)
 bool EasyArmCan::sendHybridControl(uint8_t motor_id, const HybridCommand & command)
 {
   return impl_->sendHybridControl(motor_id, command);
+}
+
+bool EasyArmCan::sendPositionControl(uint8_t motor_id, const PositionCommand & command)
+{
+  return impl_->sendPositionControl(motor_id, command);
 }
 
 MotorFeedback EasyArmCan::getMotorFeedback(uint8_t motor_id) const

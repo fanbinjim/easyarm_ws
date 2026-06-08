@@ -90,6 +90,13 @@ bool JxservoDriver::sendHybridControl(uint8_t motor_id, const HybridCommand & co
   return sendCanFd(0x110u + motor_id, data, 9);
 }
 
+bool JxservoDriver::sendPositionControl(uint8_t motor_id, const PositionCommand &)
+{
+  (void)motor_id;
+  setError("jxservo position control is not implemented");
+  return false;
+}
+
 bool JxservoDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & feedback)
 {
   const uint32_t can_id = frame.can_id & CAN_SFF_MASK;

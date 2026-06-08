@@ -51,6 +51,7 @@ public:
   bool enableMotor(uint8_t motor_id);
   bool disableMotor(uint8_t motor_id);
   bool sendHybridControl(uint8_t motor_id, const HybridCommand & command);
+  bool sendPositionControl(uint8_t motor_id, const PositionCommand & command);
   MotorFeedback getMotorFeedback(uint8_t motor_id) const;
 
   void startReceiveThread();

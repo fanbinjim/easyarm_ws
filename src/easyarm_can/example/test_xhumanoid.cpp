@@ -1,6 +1,6 @@
 /**
  * @file test_xhumanoid.cpp
- * @brief XHumanoid CAN 2.0B 力位混合控制测试程序。
+ * @brief XHumanoid CAN 2.0B/CAN FD 控制测试程序。
  */
 
 #include <algorithm>
@@ -19,14 +19,22 @@
 namespace
 {
 
+enum class ControlMode
+{
+  Hybrid,
+  Position
+};
+
 struct Options
 {
   std::string can_interface{"can0"};
   std::string model{"xhumanoid_60h_100"};
+  ControlMode mode{ControlMode::Hybrid};
   bool is_canfd{false};
   uint8_t motor_id{1};
   double position_rad{0.0};
   double velocity_rad_s{0.0};
+  double current_limit_a{1.0};
   double kp{10.0};
   double kd{5.0};
   double torque_nm{0.0};
@@ -44,9 +52,11 @@ void printUsage(const char * program)
     << "  --canfd            Use XHumanoid CAN FD protocol, default false\n"
     << "  --id <id>           Motor CAN ID, default 1\n"
     << "  --model <name>      Motor model, default xhumanoid_60h_100\n"
+    << "  --mode <mode>       Control mode: hybrid or position, default hybrid\n"
     << "  --list-models       List builtin motor models\n"
     << "  --pos <rad>         Target position, default 0\n"
-    << "  --vel <rad/s>       Target velocity, default 0\n"
+    << "  --vel <rad/s>       Velocity command/limit, default 0\n"
+    << "  --current-limit <A> Position mode current limit, default 1\n"
     << "  --kp <value>        XHumanoid KP value, default 0\n"
     << "  --kd <value>        XHumanoid KD value, default 0\n"
     << "  --torque <Nm>       Feedforward torque, default 0\n"
@@ -81,6 +91,36 @@ uint32_t floatToUint(double x, double x_min, double x_max, unsigned bits)
          (x_max - x_min));
 }
 
+uint32_t clampRoundToUint(double value, double min_value, double max_value)
+{
+  if (value < min_value) {
+    value = min_value;
+  } else if (value > max_value) {
+    value = max_value;
+  }
+  return static_cast<uint32_t>(std::lround(value));
+}
+
+double radToDeg(double rad)
+{
+  return rad * 180.0 / 3.14159265358979323846;
+}
+
+double radPerSecToRpm(double rad_s)
+{
+  return rad_s * 60.0 / (2.0 * 3.14159265358979323846);
+}
+
+void printPayload(const char * label, const uint8_t * data, std::size_t size)
+{
+  std::cout << label;
+  for (std::size_t i = 0; i < size; ++i) {
+    std::cout << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+              << static_cast<int>(data[i]);
+  }
+  std::cout << std::dec << std::setfill(' ') << "\n";
+}
+
 void printCan20HybridPayload(const Options & options)
 {
   const uint16_t kp = static_cast<uint16_t>(floatToUint(options.kp, 0.0, 2000.0, 12));
@@ -99,12 +139,7 @@ void printCan20HybridPayload(const Options & options)
     static_cast<uint8_t>(tau & 0xFFu),
   };
 
-  std::cout << "Expected payload: ";
-  for (const uint8_t byte : data) {
-    std::cout << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
-              << static_cast<int>(byte);
-  }
-  std::cout << std::dec << std::setfill(' ') << "\n";
+  printPayload("Expected hybrid payload: ", data, sizeof(data));
 }
 
 void writeFloatBe(uint8_t * data, float value)
@@ -141,20 +176,60 @@ void printCanfdHybridPayload(const Options & options)
   data[14] = static_cast<uint8_t>(static_cast<uint16_t>(tau) & 0xFFu);
   data[15] = 0;
 
-  std::cout << "Expected CAN FD payload: ";
-  for (const uint8_t byte : data) {
-    std::cout << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
-              << static_cast<int>(byte);
-  }
-  std::cout << std::dec << std::setfill(' ') << "\n";
+  printPayload("Expected CAN FD hybrid payload: ", data, sizeof(data));
 }
 
-void printHybridPayload(const Options & options)
+void printCan20PositionPayload(const Options & options)
+{
+  constexpr uint8_t kReportMessage1 = 0x01;
+  const uint16_t velocity = static_cast<uint16_t>(
+    clampRoundToUint(radPerSecToRpm(options.velocity_rad_s) * 10.0, 0.0, 32767.0));
+  const uint16_t current = static_cast<uint16_t>(
+    clampRoundToUint(options.current_limit_a * 10.0, 0.0, 4095.0));
+
+  uint8_t position[4] = {};
+  writeFloatBe(position, static_cast<float>(radToDeg(options.position_rad)));
+
+  const uint8_t data[8] = {
+    static_cast<uint8_t>(0x20u | (position[0] >> 3)),
+    static_cast<uint8_t>((position[0] << 5) | (position[1] >> 3)),
+    static_cast<uint8_t>((position[1] << 5) | (position[2] >> 3)),
+    static_cast<uint8_t>((position[2] << 5) | (position[3] >> 3)),
+    static_cast<uint8_t>((position[3] << 5) | (velocity >> 10)),
+    static_cast<uint8_t>((velocity & 0x03FCu) >> 2),
+    static_cast<uint8_t>(((velocity & 0x0003u) << 6) | (current >> 6)),
+    static_cast<uint8_t>(((current & 0x003Fu) << 2) | kReportMessage1),
+  };
+
+  printPayload("Expected position payload: ", data, sizeof(data));
+}
+
+void printCanfdPositionPayload(const Options & options)
+{
+  uint8_t data[14] = {};
+  data[0] = 0x12;
+  writeFloatBe(&data[1], static_cast<float>(radToDeg(options.position_rad)));
+  writeFloatBe(&data[5], static_cast<float>(options.velocity_rad_s));
+  writeFloatBe(&data[9], static_cast<float>(options.current_limit_a));
+  data[13] = 0;
+
+  printPayload("Expected CAN FD position payload: ", data, sizeof(data));
+}
+
+void printExpectedPayload(const Options & options)
 {
   if (options.is_canfd) {
-    printCanfdHybridPayload(options);
+    if (options.mode == ControlMode::Position) {
+      printCanfdPositionPayload(options);
+    } else {
+      printCanfdHybridPayload(options);
+    }
   } else {
-    printCan20HybridPayload(options);
+    if (options.mode == ControlMode::Position) {
+      printCan20PositionPayload(options);
+    } else {
+      printCan20HybridPayload(options);
+    }
   }
 }
 
@@ -191,6 +266,20 @@ bool parseArgs(int argc, char ** argv, Options & options)
         return false;
       }
       options.model = value;
+    } else if (arg == "--mode") {
+      const char * value = needValue("--mode");
+      if (!value) {
+        return false;
+      }
+      const std::string mode = value;
+      if (mode == "hybrid") {
+        options.mode = ControlMode::Hybrid;
+      } else if (mode == "position") {
+        options.mode = ControlMode::Position;
+      } else {
+        std::cerr << "Invalid --mode value, expected hybrid or position\n";
+        return false;
+      }
     } else if (arg == "--id") {
       const char * value = needValue("--id");
       if (!value || !parseU8(value, options.motor_id)) {
@@ -209,6 +298,12 @@ bool parseArgs(int argc, char ** argv, Options & options)
         return false;
       }
       options.velocity_rad_s = std::strtod(value, nullptr);
+    } else if (arg == "--current-limit") {
+      const char * value = needValue("--current-limit");
+      if (!value) {
+        return false;
+      }
+      options.current_limit_a = std::strtod(value, nullptr);
     } else if (arg == "--kp") {
       const char * value = needValue("--kp");
       if (!value) {
@@ -250,6 +345,10 @@ bool parseArgs(int argc, char ** argv, Options & options)
     std::cerr << "--cycles and --period-ms must be positive\n";
     return false;
   }
+  if (options.current_limit_a < 0.0) {
+    std::cerr << "--current-limit must be non-negative\n";
+    return false;
+  }
   return true;
 }
 
@@ -275,15 +374,24 @@ int main(int argc, char ** argv)
             << " motor on " << options.can_interface
             << ", motor_id=" << static_cast<int>(options.motor_id)
             << ", model=" << options.model
+            << ", mode=" << (options.mode == ControlMode::Position ? "position" : "hybrid")
             << ", is_canfd=" << (options.is_canfd ? "true" : "false") << "\n";
-  std::cout << "Hybrid command: kp=" << options.kp
-            << ", kd=" << options.kd
-            << ", pos=" << options.position_rad
-            << " rad, vel=" << options.velocity_rad_s
-            << " rad/s, torque=" << options.torque_nm
-            << " Nm, period=" << options.period_ms
-            << " ms, cycles=" << options.cycles << "\n";
-  printHybridPayload(options);
+  if (options.mode == ControlMode::Position) {
+    std::cout << "Position command: pos=" << options.position_rad
+              << " rad, vel=" << options.velocity_rad_s
+              << " rad/s, current_limit=" << options.current_limit_a
+              << " A, period=" << options.period_ms
+              << " ms, cycles=" << options.cycles << "\n";
+  } else {
+    std::cout << "Hybrid command: kp=" << options.kp
+              << ", kd=" << options.kd
+              << ", pos=" << options.position_rad
+              << " rad, vel=" << options.velocity_rad_s
+              << " rad/s, torque=" << options.torque_nm
+              << " Nm, period=" << options.period_ms
+              << " ms, cycles=" << options.cycles << "\n";
+  }
+  printExpectedPayload(options);
 
   if (options.dryrun) {
     std::cout << "Dry run only. No CAN frames were sent.\n";
@@ -311,18 +419,29 @@ int main(int argc, char ** argv)
     return 1;
   }
 
-  easyarm_can::HybridCommand command;
-  command.position_rad = options.position_rad;
-  command.velocity_rad_s = options.velocity_rad_s;
-  command.kp = options.kp;
-  command.kd = options.kd;
-  command.torque_ff_nm = options.torque_nm;
-
   for (int i = 0; i < options.cycles; ++i) {
-    if (!driver.sendHybridControl(options.motor_id, command)) {
-      std::cerr << "Failed to send hybrid command: " << driver.lastError() << "\n";
-      driver.stopReceiveThread();
-      return 1;
+    if (options.mode == ControlMode::Position) {
+      easyarm_can::PositionCommand command;
+      command.position_rad = options.position_rad;
+      command.velocity_rad_s = options.velocity_rad_s;
+      command.current_limit_a = options.current_limit_a;
+      if (!driver.sendPositionControl(options.motor_id, command)) {
+        std::cerr << "Failed to send position command: " << driver.lastError() << "\n";
+        driver.stopReceiveThread();
+        return 1;
+      }
+    } else {
+      easyarm_can::HybridCommand command;
+      command.position_rad = options.position_rad;
+      command.velocity_rad_s = options.velocity_rad_s;
+      command.kp = options.kp;
+      command.kd = options.kd;
+      command.torque_ff_nm = options.torque_nm;
+      if (!driver.sendHybridControl(options.motor_id, command)) {
+        std::cerr << "Failed to send hybrid command: " << driver.lastError() << "\n";
+        driver.stopReceiveThread();
+        return 1;
+      }
     }
 
     const auto feedback = driver.getMotorFeedback(options.motor_id);
