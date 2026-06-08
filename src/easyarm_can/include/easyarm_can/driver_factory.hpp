@@ -16,7 +16,8 @@ namespace easyarm_can
 std::unique_ptr<MotorDriver> createMotorDriver(
   Vendor vendor,
   SocketCanTransport & transport,
-  uint8_t host_can_id);
+  uint8_t host_can_id,
+  bool is_canfd);
 
 }  // namespace easyarm_can
 

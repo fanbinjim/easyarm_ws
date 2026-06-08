@@ -3,7 +3,9 @@
  * @brief XHumanoid CAN 2.0B 力位混合控制测试程序。
  */
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
@@ -21,15 +23,16 @@ struct Options
 {
   std::string can_interface{"can0"};
   std::string model{"xhumanoid_60h_100"};
+  bool is_canfd{false};
   uint8_t motor_id{1};
   double position_rad{0.0};
   double velocity_rad_s{0.0};
-  double kp{0.0};
-  double kd{0.0};
+  double kp{10.0};
+  double kd{5.0};
   double torque_nm{0.0};
-  int cycles{100};
+  int cycles{1000};
   int period_ms{5};
-  bool send{false};
+  bool dryrun{false};
   bool list_models{false};
 };
 
@@ -38,6 +41,7 @@ void printUsage(const char * program)
   std::cout
     << "Usage: " << program << " [options]\n"
     << "  --can <name>        CAN interface, default can0\n"
+    << "  --canfd            Use XHumanoid CAN FD protocol, default false\n"
     << "  --id <id>           Motor CAN ID, default 1\n"
     << "  --model <name>      Motor model, default xhumanoid_60h_100\n"
     << "  --list-models       List builtin motor models\n"
@@ -46,9 +50,9 @@ void printUsage(const char * program)
     << "  --kp <value>        XHumanoid KP value, default 0\n"
     << "  --kd <value>        XHumanoid KD value, default 0\n"
     << "  --torque <Nm>       Feedforward torque, default 0\n"
-    << "  --cycles <n>        Command cycles when --send is set, default 100\n"
+    << "  --cycles <n>        Command cycles, default 100\n"
     << "  --period-ms <ms>    Command period, default 5\n"
-    << "  --send              Send periodic hybrid-control frames\n"
+    << "  --dryrun            Print payload without opening CAN or sending frames\n"
     << "  --help              Show this help\n";
 }
 
@@ -77,7 +81,7 @@ uint32_t floatToUint(double x, double x_min, double x_max, unsigned bits)
          (x_max - x_min));
 }
 
-void printHybridPayload(const Options & options)
+void printCan20HybridPayload(const Options & options)
 {
   const uint16_t kp = static_cast<uint16_t>(floatToUint(options.kp, 0.0, 2000.0, 12));
   const uint16_t kd = static_cast<uint16_t>(floatToUint(options.kd, 0.0, 300.0, 9));
@@ -103,6 +107,57 @@ void printHybridPayload(const Options & options)
   std::cout << std::dec << std::setfill(' ') << "\n";
 }
 
+void writeFloatBe(uint8_t * data, float value)
+{
+  union FloatBytes
+  {
+    float value;
+    uint8_t bytes[4];
+  } convert{};
+  convert.value = value;
+  data[0] = convert.bytes[3];
+  data[1] = convert.bytes[2];
+  data[2] = convert.bytes[1];
+  data[3] = convert.bytes[0];
+}
+
+void printCanfdHybridPayload(const Options & options)
+{
+  const uint16_t kp = static_cast<uint16_t>(
+    std::lround(std::min(std::max(options.kp, 0.0), 6553.5) * 10.0));
+  const uint16_t kd = static_cast<uint16_t>(
+    std::lround(std::min(std::max(options.kd, 0.0), 6553.5) * 10.0));
+  const int16_t tau = static_cast<int16_t>(
+    std::lround(std::min(std::max(options.torque_nm, -32768.0), 32767.0)));
+  uint8_t data[16] = {};
+  data[0] = 0x11;
+  data[1] = static_cast<uint8_t>((kp >> 8) & 0xFFu);
+  data[2] = static_cast<uint8_t>(kp & 0xFFu);
+  data[3] = static_cast<uint8_t>((kd >> 8) & 0xFFu);
+  data[4] = static_cast<uint8_t>(kd & 0xFFu);
+  writeFloatBe(&data[5], static_cast<float>(options.position_rad));
+  writeFloatBe(&data[9], static_cast<float>(options.velocity_rad_s));
+  data[13] = static_cast<uint8_t>((static_cast<uint16_t>(tau) >> 8) & 0xFFu);
+  data[14] = static_cast<uint8_t>(static_cast<uint16_t>(tau) & 0xFFu);
+  data[15] = 0;
+
+  std::cout << "Expected CAN FD payload: ";
+  for (const uint8_t byte : data) {
+    std::cout << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+              << static_cast<int>(byte);
+  }
+  std::cout << std::dec << std::setfill(' ') << "\n";
+}
+
+void printHybridPayload(const Options & options)
+{
+  if (options.is_canfd) {
+    printCanfdHybridPayload(options);
+  } else {
+    printCan20HybridPayload(options);
+  }
+}
+
 bool parseArgs(int argc, char ** argv, Options & options)
 {
   for (int i = 1; i < argc; ++i) {
@@ -120,8 +175,10 @@ bool parseArgs(int argc, char ** argv, Options & options)
       return false;
     } else if (arg == "--list-models") {
       options.list_models = true;
-    } else if (arg == "--send") {
-      options.send = true;
+    } else if (arg == "--canfd") {
+      options.is_canfd = true;
+    } else if (arg == "--dryrun") {
+      options.dryrun = true;
     } else if (arg == "--can") {
       const char * value = needValue("--can");
       if (!value) {
@@ -214,9 +271,11 @@ int main(int argc, char ** argv)
     return 0;
   }
 
-  std::cout << "XHumanoid CAN 2.0B motor on " << options.can_interface
+  std::cout << "XHumanoid " << (options.is_canfd ? "CAN FD" : "CAN 2.0B")
+            << " motor on " << options.can_interface
             << ", motor_id=" << static_cast<int>(options.motor_id)
-            << ", model=" << options.model << "\n";
+            << ", model=" << options.model
+            << ", is_canfd=" << (options.is_canfd ? "true" : "false") << "\n";
   std::cout << "Hybrid command: kp=" << options.kp
             << ", kd=" << options.kd
             << ", pos=" << options.position_rad
@@ -226,12 +285,12 @@ int main(int argc, char ** argv)
             << " ms, cycles=" << options.cycles << "\n";
   printHybridPayload(options);
 
-  if (!options.send) {
-    std::cout << "Dry run only. Add --send after hardware safety checks to send frames.\n";
+  if (options.dryrun) {
+    std::cout << "Dry run only. No CAN frames were sent.\n";
     return 0;
   }
 
-  easyarm_can::EasyArmCan driver(options.can_interface);
+  easyarm_can::EasyArmCan driver(options.can_interface, 0x00, options.is_canfd);
   driver.setVerbose(true);
 
   if (!driver.init()) {
@@ -245,6 +304,12 @@ int main(int argc, char ** argv)
   }
 
   driver.startReceiveThread();
+
+  if (options.is_canfd && !driver.enableMotor(options.motor_id)) {
+    std::cerr << "Failed to enable motor: " << driver.lastError() << "\n";
+    driver.stopReceiveThread();
+    return 1;
+  }
 
   easyarm_can::HybridCommand command;
   command.position_rad = options.position_rad;
@@ -271,7 +336,16 @@ int main(int argc, char ** argv)
     std::this_thread::sleep_for(std::chrono::milliseconds(options.period_ms));
   }
 
-  std::cout << "Command stream stopped. XHumanoid should stop when frames stop.\n";
+  if (options.is_canfd && !driver.disableMotor(options.motor_id)) {
+    std::cerr << "Failed to disable motor: " << driver.lastError() << "\n";
+    driver.stopReceiveThread();
+    return 1;
+  }
+
+  std::cout << "Command stream stopped."
+            << (options.is_canfd ? " XHumanoid CAN FD disable command sent."
+                                : " XHumanoid should stop when frames stop.")
+            << "\n";
   driver.stopReceiveThread();
   return 0;
 }

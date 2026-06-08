@@ -32,6 +32,7 @@ private:
   MotorModel modelFor(uint8_t motor_id) const;
 
   std::map<uint8_t, MotorModel> models_;
+  std::map<uint8_t, uint8_t> counters_;
 };
 
 }  // namespace easyarm_can

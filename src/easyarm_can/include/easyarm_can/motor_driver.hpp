@@ -44,8 +44,8 @@ public:
 class MotorDriverBase : public MotorDriver
 {
 public:
-  MotorDriverBase(SocketCanTransport & transport, uint8_t host_can_id)
-  : transport_(transport), host_can_id_(host_can_id)
+  MotorDriverBase(SocketCanTransport & transport, uint8_t host_can_id, bool is_canfd)
+  : transport_(transport), host_can_id_(host_can_id), is_canfd_(is_canfd)
   {
   }
 
@@ -88,13 +88,15 @@ protected:
 
   SocketCanTransport & transport_;
   uint8_t host_can_id_;
+  bool is_canfd_{false};
   std::string last_error_;
 };
 
 std::unique_ptr<MotorDriver> createMotorDriver(
   Vendor vendor,
   SocketCanTransport & transport,
-  uint8_t host_can_id);
+  uint8_t host_can_id,
+  bool is_canfd);
 
 }  // namespace easyarm_can
 

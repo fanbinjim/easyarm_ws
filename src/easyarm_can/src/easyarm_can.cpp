@@ -19,12 +19,15 @@ namespace easyarm_can
 class EasyArmCan::Impl
 {
 public:
-  Impl(const std::string & can_interface, uint8_t host_can_id)
-  : host_can_id_(host_can_id), transport_(can_interface)
+  Impl(const std::string & can_interface, uint8_t host_can_id, bool is_canfd)
+  : host_can_id_(host_can_id), is_canfd_(is_canfd), transport_(can_interface)
   {
-    drivers_[Vendor::Jxservo] = createMotorDriver(Vendor::Jxservo, transport_, host_can_id_);
-    drivers_[Vendor::Ti5robot] = createMotorDriver(Vendor::Ti5robot, transport_, host_can_id_);
-    drivers_[Vendor::Xhumanoid] = createMotorDriver(Vendor::Xhumanoid, transport_, host_can_id_);
+    drivers_[Vendor::Jxservo] =
+      createMotorDriver(Vendor::Jxservo, transport_, host_can_id_, is_canfd_);
+    drivers_[Vendor::Ti5robot] =
+      createMotorDriver(Vendor::Ti5robot, transport_, host_can_id_, is_canfd_);
+    drivers_[Vendor::Xhumanoid] =
+      createMotorDriver(Vendor::Xhumanoid, transport_, host_can_id_, is_canfd_);
   }
 
   ~Impl()
@@ -35,7 +38,7 @@ public:
 
   bool init()
   {
-    return transport_.init(true);
+    return transport_.init(is_canfd_);
   }
 
   void close()
@@ -292,6 +295,7 @@ private:
   }
 
   uint8_t host_can_id_;
+  bool is_canfd_{false};
   SocketCanTransport transport_;
   mutable std::mutex mutex_;
   mutable std::mutex error_mutex_;
@@ -304,8 +308,8 @@ private:
   std::thread receive_thread_;
 };
 
-EasyArmCan::EasyArmCan(const std::string & can_interface, uint8_t host_can_id)
-: impl_(std::make_unique<Impl>(can_interface, host_can_id))
+EasyArmCan::EasyArmCan(const std::string & can_interface, uint8_t host_can_id, bool is_canfd)
+: impl_(std::make_unique<Impl>(can_interface, host_can_id, is_canfd))
 {
 }
 

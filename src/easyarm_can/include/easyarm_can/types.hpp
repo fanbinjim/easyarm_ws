@@ -25,6 +25,16 @@ enum class Vendor
 };
 
 /**
+ * @brief 关节模组减速器类型。
+ */
+enum class ReducerType
+{
+  Unknown,
+  Planetary,
+  Harmonic
+};
+
+/**
  * @brief 混合控制后端能力。
  */
 struct ProtocolCapabilities
@@ -69,6 +79,7 @@ struct MotorModel
   MotorLimits limits{};
   double gear_ratio{1.0};
   double torque_constant_nm_per_a{0.0};
+  ReducerType reducer_type{ReducerType::Unknown};
   bool dual_encoder{false};
   bool position_unit_degrees_on_bus{false};
   bool velocity_unit_rpm_on_bus{false};

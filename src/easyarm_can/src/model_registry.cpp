@@ -48,13 +48,17 @@ MotorModel ti5robotPro2()
   return model;
 }
 
-MotorModel xhumanoidModel(const char * name, double torque_constant)
+MotorModel xhumanoidModel(
+  const char * name,
+  double torque_constant,
+  ReducerType reducer_type)
 {
   MotorModel model;
   model.name = name;
   model.vendor = Vendor::Xhumanoid;
   model.limits = makeLimits(6.28, 21.0, 300.0, 2000.0, 300.0);
   model.torque_constant_nm_per_a = torque_constant;
+  model.reducer_type = reducer_type;
   model.position_unit_degrees_on_bus = false;
   model.velocity_unit_rpm_on_bus = false;
   model.torque_ff_raw_int16 = false;
@@ -66,23 +70,23 @@ std::vector<MotorModel> makeModels()
   return {
     jxservoDefault(),
     ti5robotPro2(),
-    xhumanoidModel("xhumanoid_55p_35", 2.6),
-    xhumanoidModel("xhumanoid_58p_half_hollow", 1.097),
-    xhumanoidModel("xhumanoid_58p_hollow", 1.3702),
-    xhumanoidModel("xhumanoid_88p_14_3_2_0", 0.9348),
-    xhumanoidModel("xhumanoid_88p_22_5_2_0", 1.572),
-    xhumanoidModel("xhumanoid_100p_24", 2.436),
-    xhumanoidModel("xhumanoid_125p_20", 2.1),
-    xhumanoidModel("xhumanoid_150p_16", 2.001),
-    xhumanoidModel("xhumanoid_40h_101", 2.16),
-    xhumanoidModel("xhumanoid_55h_50", 3.33),
-    xhumanoidModel("xhumanoid_55h_100", 5.97),
-    xhumanoidModel("xhumanoid_60h_50", 3.25),
-    xhumanoidModel("xhumanoid_60h_100", 6.536),
-    xhumanoidModel("xhumanoid_70h_50", 3.456),
-    xhumanoidModel("xhumanoid_70h_100", 5.632),
-    xhumanoidModel("xhumanoid_80h_51", 3.207),
-    xhumanoidModel("xhumanoid_80h_100", 6.14),
+    xhumanoidModel("xhumanoid_55p_35", 2.6, ReducerType::Planetary),
+    xhumanoidModel("xhumanoid_58p_half_hollow", 1.097, ReducerType::Planetary),
+    xhumanoidModel("xhumanoid_58p_hollow", 1.3702, ReducerType::Planetary),
+    xhumanoidModel("xhumanoid_88p_14_3_2_0", 0.9348, ReducerType::Planetary),
+    xhumanoidModel("xhumanoid_88p_22_5_2_0", 1.572, ReducerType::Planetary),
+    xhumanoidModel("xhumanoid_100p_24", 2.436, ReducerType::Planetary),
+    xhumanoidModel("xhumanoid_125p_20", 2.1, ReducerType::Planetary),
+    xhumanoidModel("xhumanoid_150p_16", 2.001, ReducerType::Planetary),
+    xhumanoidModel("xhumanoid_40h_101", 2.16, ReducerType::Harmonic),
+    xhumanoidModel("xhumanoid_55h_50", 3.33, ReducerType::Harmonic),
+    xhumanoidModel("xhumanoid_55h_100", 5.97, ReducerType::Harmonic),
+    xhumanoidModel("xhumanoid_60h_50", 3.25, ReducerType::Harmonic),
+    xhumanoidModel("xhumanoid_60h_100", 6.536, ReducerType::Harmonic),
+    xhumanoidModel("xhumanoid_70h_50", 3.456, ReducerType::Harmonic),
+    xhumanoidModel("xhumanoid_70h_100", 5.632, ReducerType::Harmonic),
+    xhumanoidModel("xhumanoid_80h_51", 3.207, ReducerType::Harmonic),
+    xhumanoidModel("xhumanoid_80h_100", 6.14, ReducerType::Harmonic),
   };
 }
 

@@ -40,13 +40,14 @@ ProtocolCapabilities XhumanoidDriver::capabilities() const
   caps.velocity_control = true;
   caps.current_control = true;
   caps.feedback = true;
-  caps.can_fd = false;
+  caps.can_fd = is_canfd_;
   return caps;
 }
 
 bool XhumanoidDriver::configure(uint8_t motor_id, const MotorModel & model)
 {
   models_[motor_id] = model;
+  counters_[motor_id] = 0;
   return true;
 }
 
@@ -65,12 +66,20 @@ bool XhumanoidDriver::enterHybridMode(uint8_t motor_id)
 
 bool XhumanoidDriver::enableMotor(uint8_t motor_id)
 {
+  if (is_canfd_) {
+    const uint8_t data[2] = {0x10, 0x01};
+    return sendCanFd(motor_id, data, 2);
+  }
   (void)motor_id;
   return true;
 }
 
 bool XhumanoidDriver::disableMotor(uint8_t motor_id)
 {
+  if (is_canfd_) {
+    const uint8_t data[2] = {0x10, 0x00};
+    return sendCanFd(motor_id, data, 2);
+  }
   (void)motor_id;
   return true;
 }
@@ -79,6 +88,26 @@ bool XhumanoidDriver::sendHybridControl(uint8_t motor_id, const HybridCommand & 
 {
   const MotorModel model = modelFor(motor_id);
   const auto & limits = model.limits;
+
+  if (is_canfd_) {
+    const uint16_t kp_raw = static_cast<uint16_t>(
+      std::lround(clampValue(command.kp, 0.0, 6553.5) * 10.0));
+    const uint16_t kd_raw = static_cast<uint16_t>(
+      std::lround(clampValue(command.kd, 0.0, 6553.5) * 10.0));
+    const int16_t torque_raw = static_cast<int16_t>(
+      std::lround(clampValue(command.torque_ff_nm, -32768.0, 32767.0)));
+
+    uint8_t data[16] = {};
+    data[0] = 0x11;
+    writeU16Be(&data[1], kp_raw);
+    writeU16Be(&data[3], kd_raw);
+    writeFloatBe(&data[5], static_cast<float>(command.position_rad));
+    writeFloatBe(&data[9], static_cast<float>(command.velocity_rad_s));
+    writeI16Be(&data[13], torque_raw);
+    data[15] = counters_[motor_id]++;
+    return sendCanFd(motor_id, data, 16);
+  }
+
   const uint16_t kp_raw = static_cast<uint16_t>(
     floatToUnsignedTrunc(command.kp, limits.kp_min, limits.kp_max, 12));
   const uint16_t kd_raw = static_cast<uint16_t>(
@@ -105,13 +134,42 @@ bool XhumanoidDriver::sendHybridControl(uint8_t motor_id, const HybridCommand & 
 bool XhumanoidDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & feedback)
 {
   const uint32_t can_id = frame.can_id & CAN_SFF_MASK;
-  if (can_id > 0xFFu || frame.len < 8) {
+  if (can_id > 0xFFu) {
     return false;
   }
 
   const uint8_t motor_id = static_cast<uint8_t>(can_id);
   const MotorModel model = modelFor(motor_id);
   const auto & limits = model.limits;
+
+  if (is_canfd_) {
+    if (frame.len < 16 || frame.data[0] != 0x80u) {
+      return false;
+    }
+
+    const uint16_t mode_error = readU16Be(&frame.data[1]);
+    const uint8_t mode = static_cast<uint8_t>((mode_error >> 12) & 0x0Fu);
+    const uint16_t error = static_cast<uint16_t>(mode_error & 0x0FFFu);
+    const double current_a = static_cast<double>(readI16Be(&frame.data[11])) / 100.0;
+    const double motor_temp = static_cast<double>(static_cast<int>(frame.data[13]) - 50);
+    const double mos_temp = static_cast<double>(static_cast<int>(frame.data[14]) - 50);
+
+    feedback.motor_id = motor_id;
+    feedback.position_rad = readFloatBe(&frame.data[3]);
+    feedback.velocity_rad_s = readFloatBe(&frame.data[7]);
+    feedback.torque_nm = current_a * model.torque_constant_nm_per_a;
+    feedback.temperature_deg_c = std::max(motor_temp, mos_temp);
+    feedback.fault_code = error;
+    feedback.enabled = mode != 0;
+    feedback.is_valid = true;
+    feedback.last_update = std::chrono::steady_clock::now();
+    return true;
+  }
+
+  if (frame.len < 8) {
+    return false;
+  }
+
   const uint8_t error = frame.data[0] & 0x1Fu;
 
   if ((frame.data[0] & 0xE0u) == 0xA0u && frame.data[1] == 0x0Au) {
@@ -139,7 +197,7 @@ bool XhumanoidDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & f
   double velocity = 0.0;
   double current_a = 0.0;
 
-  if (model.dual_encoder) {
+  if (model.reducer_type == ReducerType::Planetary) {
     const uint32_t position_raw =
       (static_cast<uint32_t>(frame.data[1]) << 8) | frame.data[2];
     const uint32_t velocity_raw =
@@ -194,6 +252,7 @@ MotorModel XhumanoidDriver::modelFor(uint8_t motor_id) const
   fallback.limits.kp_max = 2000.0;
   fallback.limits.kd_min = 0.0;
   fallback.limits.kd_max = 300.0;
+  fallback.reducer_type = ReducerType::Harmonic;
   return fallback;
 }
 

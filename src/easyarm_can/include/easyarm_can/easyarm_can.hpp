@@ -27,8 +27,12 @@ public:
    * @brief 构造统一 CAN 驱动。
    * @param can_interface CAN 接口名，例如 "can0"。
    * @param host_can_id 主机 CAN ID。
+   * @param is_canfd 是否启用 CAN FD 协议和 SocketCAN FD 支持。
    */
-  explicit EasyArmCan(const std::string & can_interface, uint8_t host_can_id = 0x00);
+  explicit EasyArmCan(
+    const std::string & can_interface,
+    uint8_t host_can_id = 0x00,
+    bool is_canfd = false);
   ~EasyArmCan();
 
   EasyArmCan(const EasyArmCan &) = delete;
