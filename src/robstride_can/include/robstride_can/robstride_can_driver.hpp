@@ -208,6 +208,19 @@ public:
     double kp,
     double kd,
     double torque = 0.0);
+
+  /**
+   * @brief 发送私有协议 CSP 位置控制指令
+   * @param motor_id 目标电机 CAN ID（无单位）
+   * @param position 目标位置，单位 rad
+   * @param velocity CSP 速度上限，单位 rad/s
+   * @note 依次通过通信类型18写入 0x7017(limit_spd) 和 0x7016(loc_ref)。
+   * @return 成功返回 true
+   */
+  bool sendPositionControl(
+    uint8_t motor_id,
+    double position,
+    double velocity);
   
   /**
    * @brief 写入单个参数（Type 18）

@@ -97,6 +97,13 @@ bool JxservoDriver::sendPositionControl(uint8_t motor_id, const PositionCommand 
   return false;
 }
 
+bool JxservoDriver::sendVelocityControl(uint8_t motor_id, const VelocityCommand &)
+{
+  (void)motor_id;
+  setError("jxservo velocity control is not implemented");
+  return false;
+}
+
 bool JxservoDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & feedback)
 {
   const uint32_t can_id = frame.can_id & CAN_SFF_MASK;

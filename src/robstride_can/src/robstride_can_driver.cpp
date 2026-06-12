@@ -337,6 +337,15 @@ bool RobstrideCanDriver::sendMotionControl(
   return sendFrame(frame);
 }
 
+bool RobstrideCanDriver::sendPositionControl(uint8_t motor_id, double position, double velocity)
+{
+  const double speed_limit = std::abs(velocity);
+  if (speed_limit > 0.0 && !setVelocityLimit(motor_id, speed_limit)) {
+    return false;
+  }
+  return setPositionCSP(motor_id, position);
+}
+
 bool RobstrideCanDriver::writeParameter(uint8_t motor_id, uint16_t param_index, float value)
 {
   // 通信类型18：单个参数写入（掉电丢失）

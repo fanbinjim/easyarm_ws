@@ -14,6 +14,7 @@
 - 推荐发送周期：`5ms`。
 - 温度报文：关节约 `1s` 自动上报一次，示例 `A0 0A 00 7B 00 79 7F B3` 表示绕组温度 `36.5 degC`、MOS 温度 `35.5 degC`。
 - 位置模式公共接口使用 `PositionCommand`，上层单位为 `rad`、`rad/s`、`A`。
+- 速度模式公共接口使用 `VelocityCommand`，上层单位为 `rad/s`、`A`。
 
 ## 2. SocketCAN 配置
 
@@ -58,6 +59,13 @@ ros2 run easyarm_can test_xhumanoid --mode position \
   --pos 1.0 --vel 0.5 --current-limit 2.0 --dryrun
 ```
 
+速度模式示例，`velocity=0.1 rad/s`、`current_limit=1.0 A`：
+
+```bash
+ros2 run easyarm_can test_xhumanoid --mode velocity \
+  --vel 0.1 --current-limit 1.0 --dryrun
+```
+
 ## 4. ros2 run 测试程序
 
 构建并加载环境：
@@ -73,10 +81,10 @@ source install/setup.bash
 ros2 run easyarm_can test_xhumanoid --list-models
 ```
 
-默认 dry-run，不发送 CAN 帧，只打印即将发送的 payload：
+打印 payload 但不发送 CAN 帧：
 
 ```bash
-ros2 run easyarm_can test_xhumanoid --kp 10 --kd 5 --pos 3.14 --vel 0 --torque 0
+ros2 run easyarm_can test_xhumanoid --kp 10 --kd 5 --pos 3.14 --vel 0 --torque 0 --dryrun
 ```
 
 位置模式 dry-run：
@@ -86,13 +94,13 @@ ros2 run easyarm_can test_xhumanoid --mode position \
   --pos 1.0 --vel 0.5 --current-limit 2.0 --dryrun
 ```
 
-确认机械限位和方向安全后，加 `--send` 才会周期发送：
+确认机械限位和方向安全后，不加 `--dryrun` 会周期发送：
 
 ```bash
 ros2 run easyarm_can test_xhumanoid \
   --model xhumanoid_60h_100 \
   --kp 10 --kd 5 --pos 3.14 --vel 0 --torque 0 \
-  --cycles 1000 --period-ms 5 --send
+  --cycles 1000 --period-ms 5
 ```
 
 常用参数：
@@ -102,16 +110,16 @@ ros2 run easyarm_can test_xhumanoid \
 | `--can` | CAN 接口，默认 `can0` |
 | `--id` | 电机 CAN ID，默认 `1` |
 | `--model` | 电机型号，默认 `xhumanoid_60h_100` |
-| `--mode` | 控制模式，`hybrid` 或 `position`，默认 `hybrid` |
+| `--mode` | 控制模式，`hybrid`、`position` 或 `velocity`，默认 `hybrid` |
 | `--pos` | 目标位置，单位 `rad` |
 | `--vel` | 速度参数，单位 `rad/s`；位置模式中按厂商协议可解释为速度目标或速度上限 |
-| `--current-limit` | 位置模式电流阈值，单位 `A` |
+| `--current-limit` | 位置/速度模式电流阈值，单位 `A` |
 | `--kp` | 力位混合模式 KP |
 | `--kd` | 力位混合模式 KD |
 | `--torque` | 前馈扭矩，单位 `Nm` |
 | `--cycles` | 发送周期数 |
 | `--period-ms` | 发送周期，默认 `5ms` |
-| `--send` | 真正发送 CAN 帧 |
+| `--dryrun` | 只打印 payload，不打开 CAN，也不发送 CAN 帧 |
 
 ## 5. 力位混合模式编码范围
 
@@ -163,7 +171,43 @@ CAN FD 位置模式发送 DLC `14`；位置字段同样使用 `deg`：
 | 10~13 | `current_limit_a` float32 大端 |
 | 14 | 自增计数 |
 
-## 7. 反馈解析
+## 7. 速度模式编码
+
+公共接口：
+
+```cpp
+easyarm_can::VelocityCommand command;
+command.velocity_rad_s = 0.1;
+command.current_limit_a = 1.0;
+driver.sendVelocityControl(motor_id, command);
+```
+
+CAN 2.0B 速度模式按厂家 `set_motor_speed` 打包；公共 API 使用 `rad/s`，驱动写入总线前转换为输出端 `rpm`。报文返回字段固定为 `0x01`，即 `Byte0=0x41`：
+
+| 字段 | 编码 |
+| --- | --- |
+| 电机模式 | `Byte0[5:7] = 0x02`，即高 3 位为 `0x40` |
+| 报文返回 | 驱动固定写 `0x01`，只请求报文 1 返回 |
+| 目标速度 | `radPerSecToRpm(velocity_rad_s)` float32 大端 |
+| 电流阈值 | `round(current_limit_a * 10)` 的 uint16 大端，raw 按协议夹紧到 `0~3000` |
+| 固定字节 | `Byte7 = 0xFF` |
+
+`velocity_rad_s=1.0`、`current_limit_a=1.0` 的 CAN 2.0B payload 为：
+
+```text
+414118C9EB000AFF
+```
+
+CAN FD 速度模式发送 DLC `10`：
+
+| Byte | 含义 |
+| --- | --- |
+| 1 | `0x13` |
+| 2~5 | `velocity_rad_s` float32 大端 |
+| 6~9 | `current_limit_a` float32 大端 |
+| 10 | 自增计数 |
+
+## 8. 反馈解析
 
 驱动解析两类反馈：
 
@@ -184,17 +228,18 @@ feedback.torque_nm = current_a * torque_constant_nm_per_a
 src/easyarm_can/ref/xhumanoid/HRA关节模组扭矩系数及电流计算公式.md
 ```
 
-## 8. 代码位置
+## 9. 代码位置
 
 - 驱动实现：`src/easyarm_can/src/vendors/xhumanoid/xhumanoid_driver.cpp`
 - 测试程序：`src/easyarm_can/example/test_xhumanoid.cpp`
 - 型号表：`src/easyarm_can/src/model_registry.cpp`
 - 协议资料：`src/easyarm_can/ref/xhumanoid/`
 
-## 9. 安全注意事项
+## 10. 安全注意事项
 
-- `--send` 会让电机真实运动；发送前确认关节机械限位、方向、负载和急停条件。
+- 不加 `--dryrun` 会让电机真实运动；发送前确认关节机械限位、方向、负载和急停条件。
 - XHumanoid 没有单独 disable 指令，测试程序结束后靠停止发送控制帧使电机停止。
 - 首次测试建议使用较小 `kp/kd`，并从当前位置附近的小幅 `pos` 开始。
 - 首次测试位置模式建议使用较小 `--vel` 和 `--current-limit`，并从当前位置附近的小幅 `--pos` 开始。
+- 首次测试速度模式建议使用较小 `--vel` 和 `--current-limit`，确认方向后再逐步提高速度。
 - 如果反馈扭矩一直为 `0`，先确认 `--model` 是否选择了带有效 `torque_constant_nm_per_a` 的型号。

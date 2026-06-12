@@ -22,7 +22,8 @@ namespace
 enum class ControlMode
 {
   Hybrid,
-  Position
+  Position,
+  Velocity
 };
 
 struct Options
@@ -52,11 +53,11 @@ void printUsage(const char * program)
     << "  --canfd            Use XHumanoid CAN FD protocol, default false\n"
     << "  --id <id>           Motor CAN ID, default 1\n"
     << "  --model <name>      Motor model, default xhumanoid_60h_100\n"
-    << "  --mode <mode>       Control mode: hybrid or position, default hybrid\n"
+    << "  --mode <mode>       Control mode: hybrid, position or velocity, default hybrid\n"
     << "  --list-models       List builtin motor models\n"
     << "  --pos <rad>         Target position, default 0\n"
     << "  --vel <rad/s>       Velocity command/limit, default 0\n"
-    << "  --current-limit <A> Position mode current limit, default 1\n"
+    << "  --current-limit <A> Position/velocity mode current limit, default 1\n"
     << "  --kp <value>        XHumanoid KP value, default 0\n"
     << "  --kd <value>        XHumanoid KD value, default 0\n"
     << "  --torque <Nm>       Feedforward torque, default 0\n"
@@ -216,17 +217,47 @@ void printCanfdPositionPayload(const Options & options)
   printPayload("Expected CAN FD position payload: ", data, sizeof(data));
 }
 
+void printCan20VelocityPayload(const Options & options)
+{
+  const uint16_t current = static_cast<uint16_t>(
+    clampRoundToUint(options.current_limit_a * 10.0, 0.0, 3000.0));
+
+  uint8_t data[8] = {};
+  data[0] = 0x41;
+  writeFloatBe(&data[1], static_cast<float>(radPerSecToRpm(options.velocity_rad_s)));
+  data[5] = static_cast<uint8_t>((current >> 8) & 0xFFu);
+  data[6] = static_cast<uint8_t>(current & 0xFFu);
+  data[7] = 0xFF;
+
+  printPayload("Expected velocity payload: ", data, sizeof(data));
+}
+
+void printCanfdVelocityPayload(const Options & options)
+{
+  uint8_t data[10] = {};
+  data[0] = 0x13;
+  writeFloatBe(&data[1], static_cast<float>(options.velocity_rad_s));
+  writeFloatBe(&data[5], static_cast<float>(options.current_limit_a));
+  data[9] = 0;
+
+  printPayload("Expected CAN FD velocity payload: ", data, sizeof(data));
+}
+
 void printExpectedPayload(const Options & options)
 {
   if (options.is_canfd) {
     if (options.mode == ControlMode::Position) {
       printCanfdPositionPayload(options);
+    } else if (options.mode == ControlMode::Velocity) {
+      printCanfdVelocityPayload(options);
     } else {
       printCanfdHybridPayload(options);
     }
   } else {
     if (options.mode == ControlMode::Position) {
       printCan20PositionPayload(options);
+    } else if (options.mode == ControlMode::Velocity) {
+      printCan20VelocityPayload(options);
     } else {
       printCan20HybridPayload(options);
     }
@@ -276,8 +307,10 @@ bool parseArgs(int argc, char ** argv, Options & options)
         options.mode = ControlMode::Hybrid;
       } else if (mode == "position") {
         options.mode = ControlMode::Position;
+      } else if (mode == "velocity") {
+        options.mode = ControlMode::Velocity;
       } else {
-        std::cerr << "Invalid --mode value, expected hybrid or position\n";
+        std::cerr << "Invalid --mode value, expected hybrid, position or velocity\n";
         return false;
       }
     } else if (arg == "--id") {
@@ -374,11 +407,18 @@ int main(int argc, char ** argv)
             << " motor on " << options.can_interface
             << ", motor_id=" << static_cast<int>(options.motor_id)
             << ", model=" << options.model
-            << ", mode=" << (options.mode == ControlMode::Position ? "position" : "hybrid")
+            << ", mode="
+            << (options.mode == ControlMode::Position ? "position" :
+              options.mode == ControlMode::Velocity ? "velocity" : "hybrid")
             << ", is_canfd=" << (options.is_canfd ? "true" : "false") << "\n";
   if (options.mode == ControlMode::Position) {
     std::cout << "Position command: pos=" << options.position_rad
               << " rad, vel=" << options.velocity_rad_s
+              << " rad/s, current_limit=" << options.current_limit_a
+              << " A, period=" << options.period_ms
+              << " ms, cycles=" << options.cycles << "\n";
+  } else if (options.mode == ControlMode::Velocity) {
+    std::cout << "Velocity command: vel=" << options.velocity_rad_s
               << " rad/s, current_limit=" << options.current_limit_a
               << " A, period=" << options.period_ms
               << " ms, cycles=" << options.cycles << "\n";
@@ -427,6 +467,15 @@ int main(int argc, char ** argv)
       command.current_limit_a = options.current_limit_a;
       if (!driver.sendPositionControl(options.motor_id, command)) {
         std::cerr << "Failed to send position command: " << driver.lastError() << "\n";
+        driver.stopReceiveThread();
+        return 1;
+      }
+    } else if (options.mode == ControlMode::Velocity) {
+      easyarm_can::VelocityCommand command;
+      command.velocity_rad_s = options.velocity_rad_s;
+      command.current_limit_a = options.current_limit_a;
+      if (!driver.sendVelocityControl(options.motor_id, command)) {
+        std::cerr << "Failed to send velocity command: " << driver.lastError() << "\n";
         driver.stopReceiveThread();
         return 1;
       }

@@ -164,6 +164,28 @@ bool XhumanoidDriver::sendPositionControl(uint8_t motor_id, const PositionComman
   return sendCan(motor_id, data, 8);
 }
 
+bool XhumanoidDriver::sendVelocityControl(uint8_t motor_id, const VelocityCommand & command)
+{
+  if (is_canfd_) {
+    uint8_t data[10] = {};
+    data[0] = 0x13;
+    writeFloatBe(&data[1], static_cast<float>(command.velocity_rad_s));
+    writeFloatBe(&data[5], static_cast<float>(command.current_limit_a));
+    data[9] = counters_[motor_id]++;
+    return sendCanFd(motor_id, data, 10);
+  }
+
+  const uint16_t current_raw = static_cast<uint16_t>(
+    std::lround(clampValue(command.current_limit_a * 10.0, 0.0, 3000.0)));
+
+  uint8_t data[8] = {};
+  data[0] = 0x41;
+  writeFloatBe(&data[1], static_cast<float>(radPerSecToRpm(command.velocity_rad_s)));
+  writeU16Be(&data[5], current_raw);
+  data[7] = 0xFF;
+  return sendCan(motor_id, data, 8);
+}
+
 bool XhumanoidDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & feedback)
 {
   const uint32_t can_id = frame.can_id & CAN_SFF_MASK;

@@ -24,8 +24,8 @@
                 <param name="max_velocity">2.0</param>
                 <param name="max_acceleration">8.0</param>
                 <param name="control_period">0.005</param>
-                <param name="control_mode">motion_control</param>
-                <!-- <param name="control_mode">position_csp</param> -->
+                <!-- <param name="control_mode">motion_control</param> -->
+                <param name="control_mode">position_csp</param>
             </hardware>
             <joint name="Joint1">
                 <param name="motor_id">0x01</param>

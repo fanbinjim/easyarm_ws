@@ -123,6 +123,17 @@ struct PositionCommand
 };
 
 /**
+ * @brief 速度控制命令。
+ *
+ * 单位：velocity_rad_s 为 rad/s，current_limit_a 为 A。
+ */
+struct VelocityCommand
+{
+  double velocity_rad_s{0.0};
+  double current_limit_a{0.0};
+};
+
+/**
  * @brief 电机反馈数据。
  *
  * 单位：position_rad 为 rad，velocity_rad_s 为 rad/s，torque_nm 为 Nm，

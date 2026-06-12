@@ -68,6 +68,13 @@ bool Ti5robotDriver::sendPositionControl(uint8_t motor_id, const PositionCommand
   return false;
 }
 
+bool Ti5robotDriver::sendVelocityControl(uint8_t motor_id, const VelocityCommand &)
+{
+  (void)motor_id;
+  setError("ti5robot velocity control is not implemented");
+  return false;
+}
+
 bool Ti5robotDriver::parseFeedback(const canfd_frame & frame, MotorFeedback & feedback)
 {
   const uint32_t can_id = frame.can_id & CAN_SFF_MASK;

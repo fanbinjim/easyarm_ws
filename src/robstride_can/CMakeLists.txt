@@ -35,6 +35,15 @@ target_link_libraries(single_motor_demo
     ${PROJECT_NAME}
 )
 
+add_executable(single_motor_csp_demo
+  src/single_motor_csp_demo.cpp
+)
+
+target_link_libraries(single_motor_csp_demo
+  PRIVATE
+    ${PROJECT_NAME}
+)
+
 add_executable(discover_motors
   src/discover_motors.cpp
 )
@@ -69,6 +78,7 @@ install(
 install(
   TARGETS
     single_motor_demo
+    single_motor_csp_demo
     discover_motors
     set_zero_pos
   DESTINATION lib/${PROJECT_NAME}
