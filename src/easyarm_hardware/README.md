@@ -55,6 +55,56 @@ ros2 param get /easyarm_hardware_control_mode controller_mode
 <param name="control_torque_limit_scale">0.5</param>
 ```
 
+## 250Hz 调试日志
+
+`easyarm_hardware` 可选启用二进制调试日志。开启后，hardware `write()` 线程只把固定大小 sample 写入预分配 ring buffer，后台线程批量落盘；ring buffer 满时丢日志并计数，不阻塞 CAN 发送。
+
+硬件参数在 `src/easyarm_a1_moveit_config/config/EasyARM-A1.ros2_control.xacro`：
+
+```xml
+<param name="debug_log_enabled">${debug_log_enabled}</param>
+<param name="debug_buffer_seconds">60</param>
+```
+
+默认关闭。启动 demo 时开启日志：
+
+```bash
+ros2 launch easyarm_a1_moveit_config demo.launch.py debug_log_enabled:=true
+```
+
+日志默认写到 `/dev/shm/easyarm_log_YYYYMMDD_HHMMSS.bin`，减少磁盘写入抖动。停止 hardware 时日志线程会 flush 并打印 `written`/`dropped` 统计。
+
+解析日志：
+
+```bash
+python3 src/easyarm_hardware/scripts/decode_debug_log.py
+```
+
+默认读取 `/dev/shm/easyarm_log_*.bin` 中最新的日志，输出根目录为 `debug/plot/`。输出文件夹名来自输入 bin 文件名，例如 `/dev/shm/easyarm_log_20260613_125513.bin` 会输出 CSV 到 `debug/plot/easyarm_log_20260613_125513/easyarm_log_20260613_125513.csv`，输出图片到 `debug/plot/easyarm_log_20260613_125513/all_all/all.png`。
+
+如果默认路径下还没有日志文件，脚本会提示错误；也可以直接把 `.bin` 文件路径作为第一个参数传入。
+
+只绘制指定时间窗口，单位为秒：
+
+```bash
+python3 src/easyarm_hardware/scripts/decode_debug_log.py \
+  --start 2.0 \
+  --end 6.0
+```
+
+上面的图片会保存到对应日志文件夹的 `2_0_6_0/all.png`；如果只指定一侧时间，另一侧文件夹名使用 `all`。
+
+同时拆分保存每个子图：
+
+```bash
+python3 src/easyarm_hardware/scripts/decode_debug_log.py \
+  --start 2.0 \
+  --end 6.0 \
+  --split=true
+```
+
+组合大图会包含每类对比图，以及对比图中每条曲线的单独图。拆分图片默认保存到对应时间窗口目录的 `split/` 下，文件名来自图标题，例如 `Joint_1_position_error.png`、`Joint_1_position_error_command_-_state.png`。
+
 ## TODO
 
 - 当前 `IDLE`、`POSITION`、`DRAG` 控制逻辑直接写在 `easyarm_hardware` 中，与硬件接口耦合较大，仅作为真机调试和快速验证的临时方案。

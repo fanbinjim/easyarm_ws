@@ -63,7 +63,7 @@
     <visual>
       <origin
         xyz="0 0 0"
-        rpy="0 0 0" />
+        rpy="0 3.1416538 0" />
       <geometry>
         <mesh
           filename="../meshes/easyarm_h0521/Link1.STL" />
@@ -89,7 +89,7 @@
     type="revolute">
     <origin
       xyz="0 0 0.0734"
-      rpy="0 0 0" />
+      rpy="0 3.1416538 0" />
     <parent
       link="base_link" />
     <child
@@ -147,7 +147,7 @@
     type="revolute">
     <origin
       xyz="0 0.073 0"
-      rpy="-1.5708 1.5708 0" />
+      rpy="-1.5708 -1.5708 0" />
     <parent
       link="Link1" />
     <child

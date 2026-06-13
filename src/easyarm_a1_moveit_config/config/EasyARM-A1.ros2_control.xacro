@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-    <xacro:macro name="EasyARM-A1_ros2_control" params="name initial_positions_file urdf_path">
+    <xacro:macro name="EasyARM-A1_ros2_control" params="name initial_positions_file urdf_path debug_log_enabled">
         <xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
 
         <ros2_control name="${name}" type="system">
@@ -26,11 +26,13 @@
                 <param name="control_period">0.005</param>
                 <param name="control_mode">motion_control</param>
                 <!-- <param name="control_mode">position_csp</param> -->
+                <param name="debug_log_enabled">${debug_log_enabled}</param>
+                <param name="debug_buffer_seconds">60</param>
             </hardware>
             <joint name="Joint1">
                 <param name="motor_id">0x01</param>
                 <param name="motor_type">RS00</param>
-                <param name="direction">-1.0</param>
+                <param name="direction">1.0</param>
                 <param name="position_offset">0.0</param>
                 <command_interface name="position">
                     <param name="min">-3.14</param>

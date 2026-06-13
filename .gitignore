@@ -5,3 +5,6 @@ data/
 .agents/
 .codex/
 ref/
+debug/plot/
+__pycache__/
+*.pyc

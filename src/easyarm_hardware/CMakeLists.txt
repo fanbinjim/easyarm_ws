@@ -17,6 +17,8 @@ find_package(easyarm_dynamics REQUIRED)
 find_package(robstride_can REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
+  src/debug_logger.cpp
+  src/easyarm_hardware_debug.cpp
   src/easyarm_hardware.cpp
 )
 

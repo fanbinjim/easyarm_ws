@@ -93,6 +93,14 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
   if (params.count("control_period")) {
     control_period_ = parse_double_parameter(params.at("control_period"), control_period_);
   }
+  if (params.count("debug_log_enabled")) {
+    debug_logger_config_.enabled = parse_bool_parameter(
+      params.at("debug_log_enabled"), debug_logger_config_.enabled);
+  }
+  if (params.count("debug_buffer_seconds")) {
+    debug_logger_config_.buffer_seconds = parse_double_parameter(
+      params.at("debug_buffer_seconds"), debug_logger_config_.buffer_seconds);
+  }
 
   if (!parse_joint_config(info)) {
     return hardware_interface::CallbackReturn::ERROR;
@@ -152,6 +160,12 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
     urdf_path_.empty() ? "<empty>" : urdf_path_.c_str());
   RCLCPP_INFO(logger_, "Initial hardware control mode: %s", hardware_control_mode_name(control_mode_));
   RCLCPP_INFO(logger_, "Desired motor control mode: %s", control_mode_name(desired_motor_mode_));
+  RCLCPP_INFO(
+    logger_,
+    "Debug logger: enabled=%s, path=%s, buffer_seconds=%.1f",
+    debug_logger_config_.enabled ? "true" : "false",
+    debug_logger_config_.path.c_str(),
+    debug_logger_config_.buffer_seconds);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -292,6 +306,7 @@ hardware_interface::CallbackReturn EasyArmHardware::on_configure(const rclcpp_li
 
 hardware_interface::CallbackReturn EasyArmHardware::on_cleanup(const rclcpp_lifecycle::State &)
 {
+  stop_debug_logger();
   active_motor_mode_ = MotorControlMode::MotionControl;
   control_mode_ = ControlMode::Position;
   requested_control_mode_.store(static_cast<int>(control_mode_));
@@ -310,6 +325,7 @@ hardware_interface::CallbackReturn EasyArmHardware::on_activate(const rclcpp_lif
 {
   if (use_mock_hardware_) {
     sync_states_to_commands();
+    start_debug_logger();
     RCLCPP_INFO(logger_, "Mock hardware activated");
     return hardware_interface::CallbackReturn::SUCCESS;
   }
@@ -381,11 +397,13 @@ hardware_interface::CallbackReturn EasyArmHardware::on_activate(const rclcpp_lif
     RCLCPP_INFO(logger_, "EasyArm hardware now in position_csp mode");
   }
 
+  start_debug_logger();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 hardware_interface::CallbackReturn EasyArmHardware::on_deactivate(const rclcpp_lifecycle::State &)
 {
+  stop_debug_logger();
   if (!use_mock_hardware_ && can_driver_) {
     send_damping_before_disable();
     for (const auto & config : joint_configs_) {
@@ -408,6 +426,7 @@ hardware_interface::CallbackReturn EasyArmHardware::on_shutdown(const rclcpp_lif
 
 hardware_interface::CallbackReturn EasyArmHardware::on_error(const rclcpp_lifecycle::State &)
 {
+  stop_debug_logger();
   if (!use_mock_hardware_ && can_driver_) {
     send_damping_before_disable();
     for (const auto & config : joint_configs_) {
@@ -502,8 +521,15 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
   static int write_counter = 0;
   static uint64_t frequency_counter = 0;
   static auto frequency_window_start = std::chrono::steady_clock::now();
+  const auto write_start = std::chrono::steady_clock::now();
 
   apply_requested_control_mode();
+
+  HardwareDebugSample debug_sample{};
+  const bool record_debug = debug_logger_.is_active();
+  if (record_debug) {
+    debug_sample = make_debug_sample(period);
+  }
 
   if (use_mock_hardware_) {
     for (size_t i = 0; i < joint_configs_.size(); ++i) {
@@ -511,10 +537,29 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
       smoothed_positions_[i] = hw_commands_positions_[i];
       smoothed_velocities_[i] = 0.0;
     }
+    if (record_debug) {
+      const size_t count = std::min(joint_configs_.size(), debug_sample.joints.size());
+      for (size_t i = 0; i < count; ++i) {
+        const auto & config = joint_configs_[i];
+        fill_debug_joint_command(
+          debug_sample,
+          i,
+          smoothed_positions_[i] * config.direction + config.position_offset,
+          smoothed_velocities_[i] * config.direction,
+          0.0,
+          position_kp_,
+          position_kd_,
+          true);
+      }
+      push_debug_sample(debug_sample, write_start, false);
+    }
     return hardware_interface::return_type::OK;
   }
 
   if (!can_driver_ || !can_driver_->isConnected()) {
+    if (record_debug) {
+      push_debug_sample(debug_sample, write_start, false);
+    }
     return hardware_interface::return_type::ERROR;
   }
 
@@ -538,6 +583,9 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
     dt = control_period_;
   } else if (dt > control_period_ * 2.0) {
     dt = control_period_ * 2.0;
+  }
+  if (record_debug) {
+    debug_sample.period_s = dt;
   }
 
   auto write_deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(4500);
@@ -564,6 +612,9 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
 
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     if (std::chrono::steady_clock::now() > write_deadline) {
+      if (record_debug) {
+        debug_sample.skipped_from_joint = static_cast<uint8_t>(i);
+      }
       static int deadline_warn = 0;
       if (deadline_warn++ % 200 == 0) {
         RCLCPP_WARN(logger_, "write() deadline reached, skipping joint %zu and later", i);
@@ -597,6 +648,17 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
         if (warn_counter++ % 1000 == 0) {
           RCLCPP_WARN(logger_, "Failed to send %s command to motor %u", hardware_control_mode_name(control_mode_), config.motor_id);
         }
+      }
+      if (record_debug && i < debug_sample.joints.size()) {
+        fill_debug_joint_command(
+          debug_sample,
+          i,
+          clamped_motor_position,
+          0.0,
+          command_torque,
+          0.0,
+          command_kd,
+          command_sent);
       }
 
       std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -697,8 +759,23 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
         RCLCPP_WARN(logger_, "Failed to send command to motor %u", config.motor_id);
       }
     }
+    if (record_debug && i < debug_sample.joints.size()) {
+      fill_debug_joint_command(
+        debug_sample,
+        i,
+        clamped_motor_position,
+        command_velocity,
+        command_torque,
+        active_motor_mode_ == MotorControlMode::PositionCsp ? position_kp_ : command_kp,
+        active_motor_mode_ == MotorControlMode::PositionCsp ? position_kd_ : command_kd,
+        command_sent);
+    }
 
     std::this_thread::sleep_for(std::chrono::microseconds(50));
+  }
+
+  if (record_debug) {
+    push_debug_sample(debug_sample, write_start, true);
   }
 
   write_counter++;

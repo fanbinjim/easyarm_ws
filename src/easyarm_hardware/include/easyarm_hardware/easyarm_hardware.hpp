@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "easyarm_hardware/debug_logger.hpp"
 #include "easyarm_dynamics/robot_model.hpp"
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
@@ -106,6 +108,22 @@ private:
   void sync_states_to_commands();
   void send_damping_before_disable();
   double clamp_joint_position(size_t joint_index, double position) const;
+  void start_debug_logger();
+  void stop_debug_logger();
+  HardwareDebugSample make_debug_sample(const rclcpp::Duration & period);
+  void fill_debug_joint_command(
+    HardwareDebugSample & sample,
+    size_t joint_index,
+    double motor_position,
+    double motor_velocity,
+    double motor_torque,
+    double kp,
+    double kd,
+    bool send_ok) const;
+  void push_debug_sample(
+    HardwareDebugSample & sample,
+    std::chrono::steady_clock::time_point write_start,
+    bool include_send_counts);
 
   rclcpp::Logger logger_{rclcpp::get_logger("easyarm_hardware")};
 
@@ -140,6 +158,9 @@ private:
   double drag_kd_{1.0};
   double control_torque_limit_scale_{0.5};
   bool use_mock_hardware_{false};
+  DebugLoggerConfig debug_logger_config_;
+  DebugLogger debug_logger_;
+  uint64_t debug_sequence_{0};
   MotorControlMode desired_motor_mode_{MotorControlMode::MotionControl};
   MotorControlMode active_motor_mode_{MotorControlMode::MotionControl};
   ControlMode control_mode_{ControlMode::Position};
