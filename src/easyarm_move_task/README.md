@@ -74,7 +74,9 @@ ros2 run easyarm_move_task easyarm_playback data/20260525/19-50-13.json
 默认需要输入 `yes` 确认后才会执行。可选参数示例：
 
 ```bash
-ros2 run easyarm_move_task easyarm_playback data/20260525/22-43-09.json --ros-args -p speed_scale:=0.5 -p approach_velocity:=0.2
+# 此条命令可以直接运行
+ros2 run easyarm_move_task easyarm_playback data/20260525/19-50-13.json --ros-args -p speed_scale:=0.5 -p approach_velocity:=0.2 -p max_playback_velocity:=6.0 -p autorepeat:=true -p playback_start_delay:=0.01
+
 ```
 
 播放结束后自动回到起始点并重复播放：

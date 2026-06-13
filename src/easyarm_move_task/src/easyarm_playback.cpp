@@ -589,9 +589,9 @@ int main(int argc, char * argv[])
 
   const bool require_confirm = node->declare_parameter<bool>("require_confirm", true);
   const double speed_scale = node->declare_parameter<double>("speed_scale", 1.0);
-  const double approach_velocity = node->declare_parameter<double>("approach_velocity", 0.3);
+  const double approach_velocity = node->declare_parameter<double>("approach_velocity", 1.0);
   const double step_velocity = node->declare_parameter<double>("step_velocity", 0.3);
-  const double max_playback_velocity = node->declare_parameter<double>("max_playback_velocity", 1.5);
+  const double max_playback_velocity = node->declare_parameter<double>("max_playback_velocity", 6.0);
   const bool autorepeat = node->declare_parameter<bool>("autorepeat", false);
   const double playback_start_delay = node->declare_parameter<double>("playback_start_delay", 0.2);
   const double min_approach_duration = node->declare_parameter<double>("min_approach_duration", 2.0);

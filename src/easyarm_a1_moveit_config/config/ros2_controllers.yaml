@@ -25,3 +25,5 @@ arm_controller:
     state_interfaces:
       - position
       - velocity
+    constraints:
+      stopped_velocity_tolerance: 0.1
