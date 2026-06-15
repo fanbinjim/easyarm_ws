@@ -93,9 +93,9 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
   if (params.count("control_period")) {
     control_period_ = parse_double_parameter(params.at("control_period"), control_period_);
   }
-  if (params.count("debug_log_enabled")) {
+  if (params.count("debug_enable")) {
     debug_logger_config_.enabled = parse_bool_parameter(
-      params.at("debug_log_enabled"), debug_logger_config_.enabled);
+      params.at("debug_enable"), debug_logger_config_.enabled);
   }
   if (params.count("debug_buffer_seconds")) {
     debug_logger_config_.buffer_seconds = parse_double_parameter(
@@ -587,8 +587,8 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
   if (record_debug) {
     debug_sample.period_s = dt;
   }
-
-  auto write_deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(4500);
+  // for 200Hz system, use 5.2ms for deadline 
+  auto write_deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(5200);
 
   const bool mode_needs_gravity = control_mode_ == ControlMode::Position || control_mode_ == ControlMode::Drag;
   const bool need_gravity_torque = mode_needs_gravity && enable_gravity_compensation_ && robot_model_ &&
@@ -661,7 +661,7 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
           command_sent);
       }
 
-      std::this_thread::sleep_for(std::chrono::microseconds(50));
+      // std::this_thread::sleep_for(std::chrono::microseconds(50));
       continue;
     }
 
@@ -723,7 +723,7 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
     const double max_torque = motor_params.t_max * control_torque_limit_scale_;
     const double motor_torque = std::clamp(joint_torque * config.direction, -max_torque, max_torque);
     const double command_kp = 80.0;
-    constexpr double command_kd = 4.0;
+    constexpr double command_kd = 5.0;
     const double command_velocity = motor_velocity;
     const double command_torque = motor_torque;
 

@@ -2,7 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="EasyARM-A1">
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
     <xacro:arg name="easyarm_urdf_path" default="$(find easyarm_description)/urdf/easyarm_a1_h0521.urdf" />
-    <xacro:arg name="debug_log_enabled" default="false" />
+    <xacro:arg name="debug_enable" default="false" />
 
     <!-- Import EasyARM-A1 urdf file -->
     <xacro:include filename="$(arg easyarm_urdf_path)" />
@@ -15,6 +15,6 @@
         name="EasyArmHardware"
         initial_positions_file="$(arg initial_positions_file)"
         urdf_path="$(arg easyarm_urdf_path)"
-        debug_log_enabled="$(arg debug_log_enabled)"/>
+        debug_enable="$(arg debug_enable)"/>
 
 </robot>

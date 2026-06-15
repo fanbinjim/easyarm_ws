@@ -62,14 +62,14 @@ ros2 param get /easyarm_hardware_control_mode controller_mode
 硬件参数在 `src/easyarm_a1_moveit_config/config/EasyARM-A1.ros2_control.xacro`：
 
 ```xml
-<param name="debug_log_enabled">${debug_log_enabled}</param>
+<param name="debug_enable">${debug_enable}</param>
 <param name="debug_buffer_seconds">60</param>
 ```
 
 默认关闭。启动 demo 时开启日志：
 
 ```bash
-ros2 launch easyarm_a1_moveit_config demo.launch.py debug_log_enabled:=true
+ros2 launch easyarm_a1_moveit_config demo.launch.py debug_enable:=true
 ```
 
 日志默认写到 `/dev/shm/easyarm_log_YYYYMMDD_HHMMSS.bin`，减少磁盘写入抖动。停止 hardware 时日志线程会 flush 并打印 `written`/`dropped` 统计。

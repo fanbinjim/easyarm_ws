@@ -14,6 +14,29 @@ from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 
+def print_missing_record_file(json_path: Path) -> None:
+    resolved_path = json_path if json_path.is_absolute() else Path.cwd() / json_path
+    print(f"Record file not found: {json_path}", file=sys.stderr)
+    print(f"Resolved path: {resolved_path}", file=sys.stderr)
+    print(
+        "Please run `ros2 run easyarm_move_task easyarm_record` first, "
+        "or pass an existing record JSON path.",
+        file=sys.stderr,
+    )
+
+    record_root = Path.cwd() / "data" / "path_record"
+    if record_root.is_dir():
+        candidates = sorted(
+            record_root.rglob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if candidates:
+            print("Recent records:", file=sys.stderr)
+            for candidate in candidates[:5]:
+                print(f"  {candidate}", file=sys.stderr)
+
+
 class ReplayRvizNode(Node):
     def __init__(self, json_path: Path) -> None:
         super().__init__("easyarm_replay_rviz")
@@ -112,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
 
     json_path = Path(args[0]).expanduser()
     if not json_path.is_file():
-        print(f"Record file not found: {json_path}")
+        print_missing_record_file(json_path)
         rclpy.shutdown()
         return 1
 

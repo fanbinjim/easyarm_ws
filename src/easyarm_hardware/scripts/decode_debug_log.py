@@ -172,7 +172,7 @@ def latest_default_log_path() -> Path:
     if not candidates:
         raise FileNotFoundError(
             f"No debug log found at {DEFAULT_LOG_GLOB}. "
-            "Start hardware with debug_log_enabled=true first, or pass a .bin log path explicitly."
+            "Start hardware with debug_enable=true first, or pass a .bin log path explicitly."
         )
     return candidates[-1]
 

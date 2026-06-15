@@ -160,7 +160,7 @@ std::string default_output_path()
   std::ostringstream file_name;
   file_name << std::put_time(&local_time, "%H-%M-%S") << ".json";
 
-  const auto output_dir = workspace_root / "data" / date_dir.str();
+  const auto output_dir = workspace_root / "data" / "path_record" / date_dir.str();
   std::filesystem::create_directories(output_dir);
 
   std::ostringstream path;
@@ -172,7 +172,7 @@ bool write_json(const std::string & path, const std::vector<Sample> & samples)
 {
   nlohmann::json data;
   data["joint_names"] = kJointNames;
-  data["sample_rate_hz"] = 50.0;
+  data["sample_rate_hz"] = 200.0;
   data["position_unit"] = "rad";
   data["translation_unit"] = "m";
   data["rotation_unit"] = "quaternion_xyzw";
@@ -274,7 +274,7 @@ int main(int argc, char * argv[])
   bool missing_tf_warned = false;
   auto start_time = std::chrono::steady_clock::now();
   auto next_sample_time = start_time;
-  constexpr auto sample_period = std::chrono::milliseconds(20);
+  constexpr auto sample_period = std::chrono::milliseconds(5);
 
   rclcpp::WallRate loop_rate(200.0);
   while (rclcpp::ok()) {
@@ -294,7 +294,7 @@ int main(int argc, char * argv[])
         recording = true;
         missing_joint_warned = false;
         missing_tf_warned = false;
-        RCLCPP_INFO(logger, "Recording started at 50 Hz");
+        RCLCPP_INFO(logger, "Recording started at 200 Hz");
       } else {
         RCLCPP_INFO(logger, "Recording stopped");
         break;
