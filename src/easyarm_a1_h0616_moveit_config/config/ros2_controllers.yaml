@@ -21,6 +21,9 @@ arm_controller:
       - Joint6
     command_interfaces:
       - position
+      - velocity
     state_interfaces:
       - position
       - velocity
+    constraints:
+      stopped_velocity_tolerance: 0.1

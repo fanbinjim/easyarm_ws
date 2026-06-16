@@ -1,14 +1,22 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="easyarm_a1">
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+    <xacro:arg name="easyarm_urdf_path" default="$(find easyarm_description)/urdf/easyarm_a1_h0616.urdf" />
+    <xacro:arg name="debug_enable" default="false" />
+    <xacro:arg name="use_mock_hardware" default="false" />
 
     <!-- Import easyarm_a1 urdf file -->
-    <xacro:include filename="$(find easyarm_description)/urdf/easyarm_a1_h0616.urdf" />
+    <xacro:include filename="$(arg easyarm_urdf_path)" />
 
     <!-- Import control_xacro -->
     <xacro:include filename="easyarm_a1.ros2_control.xacro" />
 
 
-    <xacro:easyarm_a1_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+    <xacro:easyarm_a1_ros2_control
+        name="EasyArmHardware"
+        initial_positions_file="$(arg initial_positions_file)"
+        urdf_path="$(arg easyarm_urdf_path)"
+        debug_enable="$(arg debug_enable)"
+        use_mock_hardware="$(arg use_mock_hardware)"/>
 
 </robot>
