@@ -19,6 +19,12 @@ ros2 launch easyarm_a1_moveit_config demo.launch.py
 - 硬件插件：`easyarm_hardware/EasyArmHardware`
 - `use_mock_hardware=false`
 
+如需使用硬件插件内置的 mock 模式，不连接 CAN，可启动：
+
+```bash
+ros2 launch easyarm_a1_moveit_config demo.launch.py use_mock_hardware:=true
+```
+
 启动前请确认机械臂处于安全状态，并已配置 SocketCAN：
 
 ```bash

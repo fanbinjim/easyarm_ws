@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-    <xacro:macro name="EasyARM-A1_ros2_control" params="name initial_positions_file urdf_path debug_enable">
+    <xacro:macro name="EasyARM-A1_ros2_control" params="name initial_positions_file urdf_path debug_enable use_mock_hardware">
         <xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
 
         <ros2_control name="${name}" type="system">
@@ -8,7 +8,7 @@
                 <plugin>easyarm_hardware/EasyArmHardware</plugin>
                 <param name="can_interface">can0</param>
                 <param name="host_can_id">0xFD</param>
-                <param name="use_mock_hardware">false</param>
+                <param name="use_mock_hardware">${use_mock_hardware}</param>
                 <param name="urdf_path">${urdf_path}</param>
                 <param name="enable_gravity_compensation">true</param>
                 <param name="hardware_control_mode">position</param>
