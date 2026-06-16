@@ -36,8 +36,8 @@
     </group_state>
     <group_state name="ready" group="arm">
         <joint name="Joint1" value="0"/>
-        <joint name="Joint2" value="1.7802"/>
-        <joint name="Joint3" value="2.7576"/>
+        <joint name="Joint2" value="1.85005"/>
+        <joint name="Joint3" value="2.68781"/>
         <joint name="Joint4" value="0.9599"/>
         <joint name="Joint5" value="1.57"/>
         <joint name="Joint6" value="0"/>

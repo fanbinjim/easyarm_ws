@@ -12,7 +12,7 @@ ros2 run easyarm_utils plot_ee_trajectory data/20260525/19-50-13.json
 
 ## keyboard_teleop
 
-键盘控制真实机械臂末端。启动确认后会读取一次当前 `Link6` 位姿作为内部 `target_pose`，后续按键只在该目标位姿上累加增量，不再用每次按键时的实时末端位姿作为增量基准。随后工具会发送当前点 hold trajectory，再将 hardware 切换到 `POSITION` 模式。所有位移和姿态增量都按 `Link6` 局部坐标系解释。
+键盘控制真实机械臂末端。启动确认后会读取一次当前 `Link6` 位姿作为内部 `target_pose`，后续按键只在该目标位姿上累加增量，不再用每次按键时的实时末端位姿作为增量基准。随后工具会发送当前点 hold trajectory，再将 hardware 切换到 `POSITION` 模式。按键移动会向 `arm_controller/joint_trajectory` 流式发布短前瞻轨迹，减少每步等待 action 完成带来的卡顿。所有位移和姿态增量都按 `Link6` 局部坐标系解释。
 
 ```bash
 ros2 run easyarm_utils keyboard_teleop
@@ -21,7 +21,7 @@ ros2 run easyarm_utils keyboard_teleop
 参数示例：
 
 ```bash
-ros2 run easyarm_utils keyboard_teleop --ros-args -p linear_step:=0.003 -p angular_step_deg:=1.0
+ros2 run easyarm_utils keyboard_teleop --ros-args -p linear_step:=0.003 -p angular_step_deg:=1.0 -p stream_duration:=0.10
 ```
 
 按键说明：

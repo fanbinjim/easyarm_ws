@@ -127,6 +127,8 @@ class KeyboardTeleop(Node):
             self.declare_parameter("angular_step_deg", 2.0).value)
         self.trajectory_duration = float(
             self.declare_parameter("trajectory_duration", 0.25).value)
+        self.stream_duration = float(
+            self.declare_parameter("stream_duration", 0.12).value)
         self.ik_timeout = float(self.declare_parameter("ik_timeout", 0.1).value)
         self.max_joint_delta = float(
             self.declare_parameter("max_joint_delta_per_step", 0.25).value)
@@ -150,8 +152,14 @@ class KeyboardTeleop(Node):
         self.action_client = ActionClient(
             self, FollowJointTrajectory,
             "arm_controller/follow_joint_trajectory")
+        self.trajectory_publisher = self.create_publisher(
+            JointTrajectory,
+            "arm_controller/joint_trajectory",
+            10,
+        )
         self.active_goal = None
         self.target_pose: PoseStamped | None = None
+        self.target_joints: list[float] | None = None
 
     def wait_until_ready(self) -> bool:
         self.status = "Waiting for joint_states"
@@ -201,6 +209,7 @@ class KeyboardTeleop(Node):
         pose.pose.orientation.z = transform.transform.rotation.z
         pose.pose.orientation.w = transform.transform.rotation.w
         self.target_pose = pose
+        self.target_joints = self.joint_cache.positions()
         self.status = "Target pose initialized"
         return True
 
@@ -210,6 +219,7 @@ class KeyboardTeleop(Node):
         if current is None or not self.send_joint_goal(current):
             self.get_logger().error("Failed to send initial hold trajectory")
             return False
+        self.target_joints = list(current)
 
         self.status = "Switching to POSITION"
         if not self.param_client.wait_for_service(timeout_sec=3.0):
@@ -248,25 +258,25 @@ class KeyboardTeleop(Node):
             self.status = "Target pose is not initialized"
             return
 
-        target_joints = self._compute_ik(target_pose)
+        reference_joints = self.target_joints or current_joints
+        target_joints = self._compute_ik(target_pose, reference_joints)
         if target_joints is None:
             self.status = f"IK failed: {command.name}"
             return
 
         max_delta = max(
             abs(target - current)
-            for target, current in zip(target_joints, current_joints))
+            for target, current in zip(target_joints, reference_joints))
         if max_delta > self.max_joint_delta:
             self.status = (
                 f"Rejected IK jump {max_delta:.3f} rad > "
                 f"{self.max_joint_delta:.3f} rad")
             return
 
-        if self.send_joint_goal(target_joints):
-            self.target_pose = target_pose
-            self.status = f"Moved: {command.name}"
-        else:
-            self.status = f"Move failed: {command.name}"
+        self.publish_joint_target(target_joints, reference_joints)
+        self.target_pose = target_pose
+        self.target_joints = list(target_joints)
+        self.status = f"Streaming: {command.name}"
 
     def send_joint_goal(self, positions: list[float]) -> bool:
         goal = FollowJointTrajectory.Goal()
@@ -295,6 +305,28 @@ class KeyboardTeleop(Node):
         self.active_goal = None
         return result_future.result().status == 4
 
+    def publish_joint_target(
+        self,
+        positions: list[float],
+        reference_positions: list[float] | None = None,
+    ) -> None:
+        trajectory = JointTrajectory()
+        trajectory.header.stamp = self.get_clock().now().to_msg()
+        trajectory.joint_names = list(JOINT_NAMES)
+
+        duration = max(self.stream_duration, 0.02)
+        point = JointTrajectoryPoint()
+        point.positions = [float(value) for value in positions]
+        if reference_positions is not None:
+            point.velocities = [
+                float((target - reference) / duration)
+                for target, reference in zip(positions, reference_positions)
+            ]
+        point.time_from_start = seconds_to_duration(duration)
+        trajectory.points.append(point)
+
+        self.trajectory_publisher.publish(trajectory)
+
     def cancel_active_goal(self) -> None:
         if self.active_goal is not None:
             self.active_goal.cancel_goal_async()
@@ -304,6 +336,7 @@ class KeyboardTeleop(Node):
         positions = self.joint_cache.positions()
         if positions is not None:
             self.send_joint_goal(positions)
+            self.target_joints = list(positions)
 
     def _candidate_target_pose(self, command: TeleopCommand) -> PoseStamped | None:
         if self.target_pose is None:
@@ -337,10 +370,19 @@ class KeyboardTeleop(Node):
         pose.pose.orientation.w = target_q[3]
         return pose
 
-    def _compute_ik(self, pose: PoseStamped) -> list[float] | None:
-        seed = self.joint_cache.joint_state_msg()
-        if seed is None:
+    def _compute_ik(
+        self,
+        pose: PoseStamped,
+        seed_positions: list[float] | None = None,
+    ) -> list[float] | None:
+        if seed_positions is None:
+            seed_positions = self.joint_cache.positions()
+        if seed_positions is None:
             return None
+
+        seed = JointState()
+        seed.name = list(JOINT_NAMES)
+        seed.position = [float(value) for value in seed_positions]
 
         request = GetPositionIK.Request()
         request.ik_request.group_name = self.group_name
