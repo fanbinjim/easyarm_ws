@@ -8,7 +8,7 @@ def generate_launch_description():
     # 获取默认的urdf路径
     
     urdf_package_path = get_package_share_directory('easyarm_description')      # 返回 install/easyarm_description/share 目录
-    default_urdf_path = os.path.join(urdf_package_path, 'urdf', 'easyarm_a1_h0521.urdf')
+    default_urdf_path = os.path.join(urdf_package_path, 'urdf', 'easyarm_a1_h0616.urdf')
     default_rviz_config_path = os.path.join(urdf_package_path, 'rviz', 'display_robot_model.rviz')
     
     # 声明一个urdf参数 model ，方便修改

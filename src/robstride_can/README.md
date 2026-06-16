@@ -61,6 +61,7 @@ install/robstride_can/lib/librobstride_can.so
 ```text
 install/robstride_can/lib/robstride_can/single_motor_demo
 install/robstride_can/lib/robstride_can/discover_motors
+install/robstride_can/lib/robstride_can/set_zero_pos
 ```
 
 ## CAN 接口准备
@@ -159,6 +160,30 @@ ros2 run robstride_can discover_motors "" 0x06
 ```text
 发现电机: id=0x06, angle=0.123 rad, temp=31.2 C, mode=2, fault=0x0
 ```
+
+## 电机零位标定程序
+
+`set_zero_pos` 用于把指定电机的当前位置写入为电机机械零位。该程序只初始化 CAN 驱动并发送零位设置指令，不会使能电机或执行运动。
+
+运行方式：
+
+```bash
+ros2 run robstride_can set_zero_pos <can_interface> <motor_id>
+```
+
+示例：
+
+```bash
+ros2 run robstride_can set_zero_pos can0 0x01
+ros2 run robstride_can set_zero_pos can0 1
+```
+
+参数规则：
+
+- `can_interface` 是 SocketCAN 接口名，例如 `can0`。
+- `motor_id` 可以使用十六进制，例如 `0x01`，也可以使用十进制，例如 `1`。
+
+注意：该操作会改变电机内部零位。运行前请确认关节已经移动到需要作为零点的位置，且 motor ID 填写正确。建议一次只标定一个电机，并确保机械臂处于安全状态。
 
 ## 在其他 ROS 2 包中使用
 

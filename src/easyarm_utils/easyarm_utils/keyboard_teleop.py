@@ -453,7 +453,9 @@ def seconds_to_duration(seconds: float) -> Duration:
     return duration
 
 
-def normalize_quaternion(q: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+def normalize_quaternion(
+    q: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     norm = math.sqrt(sum(value * value for value in q))
     if norm == 0.0:
         return (0.0, 0.0, 0.0, 1.0)
@@ -474,7 +476,9 @@ def quaternion_multiply(
     )
 
 
-def quaternion_conjugate(q: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+def quaternion_conjugate(
+    q: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     return (-q[0], -q[1], -q[2], q[3])
 
 

@@ -2,10 +2,12 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -499,6 +501,34 @@ size_t nearest_sample_index(const Record & record, const JointPositions & positi
   return best_index;
 }
 
+size_t sample_index_at_time(const Record & record, double t, size_t lower_bound_index)
+{
+  if (record.samples.empty()) {
+    return 0;
+  }
+  if (lower_bound_index >= record.samples.size()) {
+    lower_bound_index = record.samples.size() - 1;
+  }
+  if (t <= record.samples[lower_bound_index].t) {
+    return lower_bound_index;
+  }
+
+  const auto begin = record.samples.begin() + static_cast<std::ptrdiff_t>(lower_bound_index);
+  const auto end = record.samples.end();
+  const auto it = std::upper_bound(
+    begin, end, t,
+    [](double value, const Sample & sample) {
+      return value < sample.t;
+    });
+  if (it == begin) {
+    return lower_bound_index;
+  }
+  if (it == end) {
+    return record.samples.size() - 1;
+  }
+  return static_cast<size_t>(std::distance(record.samples.begin(), it) - 1);
+}
+
 void hold_current_position(
   const JointStateCache & cache, TrajectoryClient & client,
   rclcpp::Logger logger)
@@ -709,6 +739,9 @@ int main(int argc, char * argv[])
   std::shared_future<rclcpp_action::ResultCode> active_result;
   std::string status = "At start point. Press SPACE to play.";
   auto last_render = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+  auto playback_wall_start = std::chrono::steady_clock::now();
+  double playback_record_start_t = 0.0;
+  size_t playback_start_index = 0;
 
   rclcpp::WallRate loop_rate(50.0);
   while (rclcpp::ok()) {
@@ -775,6 +808,9 @@ int main(int argc, char * argv[])
           state = PlayerState::Finished;
           status = "Playback finished. Press SPACE to replay or q to quit.";
         } else {
+          playback_wall_start = std::chrono::steady_clock::now();
+          playback_record_start_t = record.samples[index].t;
+          playback_start_index = index;
           active_result = trajectory_client.send(
             make_playback_trajectory(record, index, speed_scale, playback_start_delay));
         }
@@ -816,6 +852,12 @@ int main(int argc, char * argv[])
           hold_current_position(joint_state_cache, trajectory_client, logger);
         }
         active_result = std::shared_future<rclcpp_action::ResultCode>();
+      } else {
+        const auto elapsed = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - playback_wall_start).count();
+        const double playback_elapsed = std::max(0.0, elapsed - playback_start_delay);
+        const double record_t = playback_record_start_t + playback_elapsed * speed_scale;
+        index = sample_index_at_time(record, record_t, playback_start_index);
       }
     }
 

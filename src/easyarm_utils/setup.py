@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'keyboard_teleop = easyarm_utils.keyboard_teleop:main',
             'plot_ee_trajectory = easyarm_utils.plot_ee_trajectory:main',
+            'smooth_easyarm_trajectory = easyarm_utils.smooth_trajectory:main',
         ],
     },
 )
