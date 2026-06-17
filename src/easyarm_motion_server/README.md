@@ -27,9 +27,13 @@ default_acceleration_scale=0.2
 movej_planner_id=PTP
 movel_planner_id=LIN
 planning_pipeline_id=pilz_industrial_motion_planner
+joint_state_wait_timeout=5.0
+max_joint_state_age=0.5
 ```
 
 `MoveJ` 使用 Pilz `PTP`，`MoveL` 使用 Pilz `LIN`。`MoveJ/MoveL` 不会自动切换硬件模式，只有当前硬件模式已经是 `POSITION` 时才允许规划和执行；如果当前是 `DRAG` 或 `IDLE`，会直接返回失败。
+
+执行 MoveJ/MoveL 前会等待 `/joint_states` 包含 6 个关节并且时间戳足够新，避免刚启动时 MoveIt 因当前状态过期而在执行阶段 abort。
 
 `/easyarm/set_mode` 切到 `POSITION` 时，会先读取当前 `/joint_states`，向 `arm_controller/follow_joint_trajectory` 发送当前点 hold trajectory，然后再设置 `controller_mode=POSITION`，避免从 `DRAG` 回到 `POSITION` 时回到旧目标位置。
 

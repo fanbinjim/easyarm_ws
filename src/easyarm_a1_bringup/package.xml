@@ -15,11 +15,12 @@
   <depend>easyarm_a1_moveit_config</depend>
   <depend>easyarm_description</depend>
   <depend>easyarm_hardware</depend>
+  <depend>easyarm_interfaces</depend>
   <depend>easyarm_motion_server</depend>
-  <exec_depend>easyarm_app</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
   <exec_depend>moveit_ros_visualization</exec_depend>
+  <exec_depend>rclpy</exec_depend>
   <exec_depend>ros2controlcli</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>rviz_common</exec_depend>

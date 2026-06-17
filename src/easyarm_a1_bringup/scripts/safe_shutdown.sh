@@ -12,6 +12,7 @@ SKIP_SET_POSITION="${SKIP_SET_POSITION:-0}"
 SKIP_MOVE_READY="${SKIP_MOVE_READY:-0}"
 SKIP_HARDWARE_DISABLE="${SKIP_HARDWARE_DISABLE:-0}"
 SKIP_KILL_LAUNCH="${SKIP_KILL_LAUNCH:-0}"
+MOTION_TIMEOUT="${MOTION_TIMEOUT:-5.0}"
 
 READY_JOINTS=(${READY_JOINTS:-0 1.85005 2.68781 0.9599 1.57 0})
 READY_VELOCITY_SCALE="${READY_VELOCITY_SCALE:-0.2}"
@@ -31,6 +32,27 @@ log() {
 run_step() {
   log "$*"
   "$@"
+}
+
+run_motion_shutdown() {
+  local args=(
+    --timeout "${MOTION_TIMEOUT}"
+    --ready-joints "${READY_JOINTS[@]}"
+    --velocity-scale "${READY_VELOCITY_SCALE}"
+    --acceleration-scale "${READY_ACCELERATION_SCALE}"
+  )
+
+  if [[ "${SKIP_STOP}" == "1" ]]; then
+    args+=(--skip-stop)
+  fi
+  if [[ "${SKIP_SET_POSITION}" == "1" ]]; then
+    args+=(--skip-set-position)
+  fi
+  if [[ "${SKIP_MOVE_READY}" == "1" ]]; then
+    args+=(--skip-move-ready)
+  fi
+
+  run_step ros2 run easyarm_a1_bringup safe_shutdown_motion "${args[@]}"
 }
 
 find_easyarm_launch_pids() {
@@ -162,29 +184,12 @@ stop_launch_tree() {
   return 1
 }
 
-if [[ "${SKIP_STOP}" == "1" ]]; then
-  log "SKIP_STOP=1 set. Skipping motion stop."
-else
-  run_step ros2 run easyarm_app easyarm stop
+if (( ${#READY_JOINTS[@]} != 6 )); then
+  log "READY_JOINTS must contain 6 joint values, got ${#READY_JOINTS[@]}."
+  exit 1
 fi
 
-if [[ "${SKIP_SET_POSITION}" == "1" ]]; then
-  log "SKIP_SET_POSITION=1 set. Skipping POSITION mode switch."
-else
-  run_step ros2 run easyarm_app easyarm set-mode POSITION
-fi
-
-if [[ "${SKIP_MOVE_READY}" == "1" ]]; then
-  log "SKIP_MOVE_READY=1 set. Skipping move to ready."
-else
-  if (( ${#READY_JOINTS[@]} != 6 )); then
-    log "READY_JOINTS must contain 6 joint values, got ${#READY_JOINTS[@]}."
-    exit 1
-  fi
-  run_step ros2 run easyarm_app easyarm movej "${READY_JOINTS[@]}" \
-    --velocity-scale "${READY_VELOCITY_SCALE}" \
-    --acceleration-scale "${READY_ACCELERATION_SCALE}"
-fi
+run_motion_shutdown
 
 if [[ "${SKIP_HARDWARE_DISABLE}" == "1" ]]; then
   log "SKIP_HARDWARE_DISABLE=1 set. Skipping ros2_control hardware shutdown."

@@ -95,6 +95,9 @@ ros2 run easyarm_app easyarm get-pose
 `arm_controller`、禁用 `EasyArmHardware`，最后关闭 `bringup.launch.py` 或
 `demo.launch.py` 进程树。
 
+其中 motion server 相关操作由 `safe_shutdown_motion` 在同一个 ROS 节点里完成，
+避免反复启动 `ros2 run easyarm_app easyarm ...`。
+
 真实硬件上执行前确认机械臂运动路径安全：
 
 ```bash
@@ -107,4 +110,10 @@ ros2 run easyarm_a1_bringup safe_shutdown.sh
 SKIP_MOVE_READY=1 ros2 run easyarm_a1_bringup safe_shutdown.sh
 SKIP_HARDWARE_DISABLE=1 ros2 run easyarm_a1_bringup safe_shutdown.sh
 SKIP_KILL_LAUNCH=1 ros2 run easyarm_a1_bringup safe_shutdown.sh
+```
+
+只测试 motion server 相关退出动作时，可以直接运行：
+
+```bash
+ros2 run easyarm_a1_bringup safe_shutdown_motion
 ```

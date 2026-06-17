@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -94,6 +95,8 @@ public:
     movel_planner_id_ = declare_parameter<std::string>("movel_planner_id", "LIN");
     planning_pipeline_id_ =
       declare_parameter<std::string>("planning_pipeline_id", "pilz_industrial_motion_planner");
+    joint_state_wait_timeout_sec_ = declare_parameter<double>("joint_state_wait_timeout", 5.0);
+    max_joint_state_age_sec_ = declare_parameter<double>("max_joint_state_age", 0.5);
 
     callback_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
@@ -487,6 +490,9 @@ private:
       message = "MoveJ/MoveL require POSITION mode, current mode is " + mode;
       return false;
     }
+    if (!wait_for_fresh_joint_state(message)) {
+      return false;
+    }
 
     return true;
   }
@@ -604,6 +610,82 @@ private:
 
     message = "ROS shutdown while waiting for current /joint_states";
     return false;
+  }
+
+  bool wait_for_fresh_joint_state(std::string & message)
+  {
+    const auto timeout = std::chrono::duration<double>(joint_state_wait_timeout_sec_);
+    const auto start = std::chrono::steady_clock::now();
+    while (rclcpp::ok()) {
+      if (has_fresh_joint_state(message)) {
+        return true;
+      }
+
+      if (std::chrono::steady_clock::now() - start > timeout) {
+        if (message.empty()) {
+          message = "Timeout waiting for fresh /joint_states";
+        }
+        return false;
+      }
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    message = "ROS shutdown while waiting for fresh /joint_states";
+    return false;
+  }
+
+  bool has_fresh_joint_state(std::string & message)
+  {
+    std::lock_guard<std::mutex> lock(joint_state_mutex_);
+    if (!last_joint_state_) {
+      message = "Waiting for /joint_states";
+      return false;
+    }
+
+    const auto missing = missing_joint_names(*last_joint_state_);
+    if (!missing.empty()) {
+      message = "Waiting for /joint_states containing all arm joints; missing: " + missing;
+      return false;
+    }
+
+    const auto stamp = rclcpp::Time(last_joint_state_->header.stamp);
+    if (stamp.nanoseconds() == 0) {
+      message = "Waiting for /joint_states with a valid timestamp";
+      return false;
+    }
+
+    const auto age = now() - stamp;
+    if (age < rclcpp::Duration(0, 0)) {
+      message = "Waiting for /joint_states timestamp to synchronize with node clock";
+      return false;
+    }
+
+    const auto max_age = rclcpp::Duration::from_seconds(max_joint_state_age_sec_);
+    if (age > max_age) {
+      std::ostringstream stream;
+      stream << "Waiting for fresh /joint_states; latest sample is "
+             << age.seconds() << "s old";
+      message = stream.str();
+      return false;
+    }
+
+    message.clear();
+    return true;
+  }
+
+  std::string missing_joint_names(const sensor_msgs::msg::JointState & joint_state) const
+  {
+    std::string missing;
+    for (const auto & joint_name : kJointNames) {
+      if (std::find(joint_state.name.begin(), joint_state.name.end(), joint_name) == joint_state.name.end()) {
+        if (!missing.empty()) {
+          missing += ", ";
+        }
+        missing += joint_name;
+      }
+    }
+    return missing;
   }
 
   bool read_current_joint_positions(std::vector<double> & positions)
@@ -796,6 +878,8 @@ private:
   std::string movej_planner_id_{"PTP"};
   std::string movel_planner_id_{"LIN"};
   std::string planning_pipeline_id_{"pilz_industrial_motion_planner"};
+  double joint_state_wait_timeout_sec_{5.0};
+  double max_joint_state_age_sec_{0.5};
 
   std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
   std::mutex move_group_mutex_;

@@ -26,6 +26,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'safe_shutdown_motion = easyarm_a1_bringup.safe_shutdown_motion:console_main',
         ],
     },
 )
