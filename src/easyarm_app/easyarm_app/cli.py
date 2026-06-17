@@ -176,9 +176,12 @@ class EasyArmCli(Node):
 
     def _log_response(self, success: bool, message: str) -> None:
         logger = self.get_logger()
-        log = logger.info if success else logger.error
-        log(f"success: {success}")
-        log(f"message: {message}")
+        if success:
+            logger.info(f"success: {success}")
+            logger.info(f"message: {message}")
+        else:
+            logger.error(f"success: {success}")
+            logger.error(f"message: {message}")
 
     def _log_info(self, message: str) -> None:
         self.get_logger().info(message)
