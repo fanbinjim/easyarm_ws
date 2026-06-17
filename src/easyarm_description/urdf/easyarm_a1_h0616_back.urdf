@@ -1,0 +1,395 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com)
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="ass_easyarm_a1_h0616.SLDASM">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="1.85864301500435E-08 0.000170528015075361 0.0233752275370471"
+        rpy="0 0 0" />
+      <mass
+        value="0.141091157039369" />
+      <inertia
+        ixx="0.000117337484347889"
+        ixy="-9.04390040901409E-11"
+        ixz="1.55362925573062E-11"
+        iyy="0.0001185851036162"
+        iyz="2.66614551541239E-07"
+        izz="0.000208390027083898" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="Link1">
+    <inertial>
+      <origin
+        xyz="1.8778E-10 -0.0029368 -0.023504"
+        rpy="0 0 0" />
+      <mass
+        value="0.14848" />
+      <inertia
+        ixx="5.9195E-05"
+        ixy="-5.7068E-09"
+        ixz="7.3201E-13"
+        iyy="5.8621E-05"
+        iyz="-1.0137E-07"
+        izz="6.0699E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.75294 0.75294 0.75294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint1"
+    type="revolute">
+    <origin
+      xyz="0 0 0.058"
+      rpy="3.1416 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="Link1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="6.0"
+      velocity="10.0" />
+  </joint>
+  <link
+    name="Link2">
+    <inertial>
+      <origin
+        xyz="1.9675E-13 0.09 -0.023386"
+        rpy="0 0 0" />
+      <mass
+        value="0.31461" />
+      <inertia
+        ixx="0.00013277"
+        ixy="-1.1414E-08"
+        ixz="1.3378E-19"
+        iyy="0.00011937"
+        iyz="2.5314E-16"
+        izz="0.00013393" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.75294 0.75294 0.75294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint2"
+    type="revolute">
+    <origin
+      xyz="0 -0.045 -0.0214"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="Link1" />
+    <child
+      link="Link2" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="6.0"
+      velocity="10.0" />
+  </joint>
+  <link
+    name="Link3">
+    <inertial>
+      <origin
+        xyz="-1.93134327140323E-07 0.143039950619401 0.0386200574103205"
+        rpy="0 0 0" />
+      <mass
+        value="0.188161905183098" />
+      <inertia
+        ixx="7.78611830449173E-05"
+        ixy="5.64536059673564E-09"
+        ixz="3.88896681156799E-10"
+        iyy="6.63480692941198E-05"
+        iyz="-2.53380690786543E-07"
+        izz="7.791777594025E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint3"
+    type="revolute">
+    <origin
+      xyz="0 0.18 0"
+      rpy="0 0 0" />
+    <parent
+      link="Link2" />
+    <child
+      link="Link3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="6.0"
+      velocity="10.0" />
+  </joint>
+  <link
+    name="Link4">
+    <inertial>
+      <origin
+        xyz="-2.9715E-10 0.0021041 0.042063"
+        rpy="0 0 0" />
+      <mass
+        value="0.14848" />
+      <inertia
+        ixx="5.9195E-05"
+        ixy="5.5776E-13"
+        ixz="-5.7068E-09"
+        iyy="6.0699E-05"
+        iyz="1.0299E-07"
+        izz="5.8621E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.75294 0.75294 0.75294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint4"
+    type="revolute">
+    <origin
+      xyz="0 0.172 0.0176"
+      rpy="3.1416 0 0" />
+    <parent
+      link="Link3" />
+    <child
+      link="Link4" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="6.0"
+      velocity="10.0" />
+  </joint>
+  <link
+    name="Link5">
+    <inertial>
+      <origin
+        xyz="2.5974E-06 0.0054131 0.031728"
+        rpy="0 0 0" />
+      <mass
+        value="0.045369" />
+      <inertia
+        ixx="9.3201E-06"
+        ixy="3.4243E-10"
+        ixz="5.3817E-09"
+        iyy="1.425E-05"
+        iyz="-1.4514E-07"
+        izz="9.8891E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link5.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.75294 0.75294 0.75294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link5.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint5"
+    type="revolute">
+    <origin
+      xyz="0 -0.0214 0.045"
+      rpy="1.5708 0 0" />
+    <parent
+      link="Link4" />
+    <child
+      link="Link5" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="6.0"
+      velocity="10.0" />
+  </joint>
+  <link
+    name="Link6">
+    <inertial>
+      <origin
+        xyz="6.2237E-18 -5.5511E-17 -0.0060817"
+        rpy="0 0 0" />
+      <mass
+        value="0.016496" />
+      <inertia
+        ixx="2.6123E-06"
+        ixy="-3.3894E-25"
+        ixz="1.3422E-22"
+        iyy="2.6123E-06"
+        iyz="-2.6298E-22"
+        izz="4.6702E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link6.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.75294 0.75294 0.75294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://easyarm_description/meshes/easyarm_h0616/Link6.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint6"
+    type="revolute">
+    <origin
+      xyz="0 0.037 0.0399"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="Link5" />
+    <child
+      link="Link6" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="6.0"
+      velocity="10.0" />
+  </joint>
+</robot>

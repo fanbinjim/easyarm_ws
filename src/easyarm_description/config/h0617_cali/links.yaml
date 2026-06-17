@@ -1,0 +1,77 @@
+base_link:
+  mesh: package://easyarm_description/meshes/easyarm_h0616/base_link.STL
+  visual:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+    color: [0.752941176470588, 0.752941176470588, 0.752941176470588, 1.0]
+  collision:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+Link1:
+  mesh: package://easyarm_description/meshes/easyarm_h0616/Link1.STL
+  visual:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+    color: [0.75294, 0.75294, 0.75294, 1.0]
+  collision:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+Link2:
+  mesh: package://easyarm_description/meshes/easyarm_h0616/Link2.STL
+  visual:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+    color: [0.75294, 0.75294, 0.75294, 1.0]
+  collision:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+Link3:
+  mesh: package://easyarm_description/meshes/easyarm_h0616/Link3.STL
+  visual:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+    color: [0.752941176470588, 0.752941176470588, 0.752941176470588, 1.0]
+  collision:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+Link4:
+  mesh: package://easyarm_description/meshes/easyarm_h0616/Link4.STL
+  visual:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+    color: [0.75294, 0.75294, 0.75294, 1.0]
+  collision:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+Link5:
+  mesh: package://easyarm_description/meshes/easyarm_h0616/Link5.STL
+  visual:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+    color: [0.75294, 0.75294, 0.75294, 1.0]
+  collision:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+Link6:
+  mesh: package://easyarm_description/meshes/easyarm_h0616/Link6.STL
+  visual:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+    color: [0.75294, 0.75294, 0.75294, 1.0]
+  collision:
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]

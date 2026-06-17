@@ -1,0 +1,83 @@
+Joint1:
+  type: revolute
+  parent: base_link
+  child: Link1
+  origin:
+    xyz: [0.0, 0.0, 0.058]
+    rpy: [3.1416, 0.0, 0.0]
+  axis: [0.0, 0.0, 1.0]
+  limit:
+    lower: -3.14
+    upper: 3.14
+    effort: 6.0
+    velocity: 10.0
+
+Joint2:
+  type: revolute
+  parent: Link1
+  child: Link2
+  origin:
+    xyz: [0.0, -0.045, -0.0214]
+    rpy: [-1.5708, 0.0, 0.0]
+  axis: [0.0, 0.0, 1.0]
+  limit:
+    lower: -3.14
+    upper: 3.14
+    effort: 6.0
+    velocity: 10.0
+
+Joint3:
+  type: revolute
+  parent: Link2
+  child: Link3
+  origin:
+    xyz: [0.0, 0.18, 0.0]
+    rpy: [0.0, 0.0, 0.0]
+  axis: [0.0, 0.0, -1.0]
+  limit:
+    lower: -3.14
+    upper: 3.14
+    effort: 6.0
+    velocity: 10.0
+
+Joint4:
+  type: revolute
+  parent: Link3
+  child: Link4
+  origin:
+    xyz: [0.0, 0.172, 0.0176]
+    rpy: [3.1416, 0.0, 0.0]
+  axis: [0.0, 0.0, -1.0]
+  limit:
+    lower: -3.14
+    upper: 3.14
+    effort: 6.0
+    velocity: 10.0
+
+Joint5:
+  type: revolute
+  parent: Link4
+  child: Link5
+  origin:
+    xyz: [0.0, -0.0214, 0.045]
+    rpy: [1.5708, 0.0, 0.0]
+  axis: [0.0, 0.0, -1.0]
+  limit:
+    lower: -3.14
+    upper: 3.14
+    effort: 6.0
+    velocity: 10.0
+
+Joint6:
+  type: revolute
+  parent: Link5
+  child: Link6
+  origin:
+    xyz: [0.0, 0.037, 0.0399]
+    rpy: [-1.5708, 0.0, 0.0]
+  axis: [0.0, 0.0, -1.0]
+  limit:
+    lower: -3.14
+    upper: 3.14
+    effort: 6.0
+    velocity: 10.0

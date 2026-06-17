@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="easyarm_origin" params="origin">
+    <origin
+      xyz="${origin.xyz[0]} ${origin.xyz[1]} ${origin.xyz[2]}"
+      rpy="${origin.rpy[0]} ${origin.rpy[1]} ${origin.rpy[2]}" />
+  </xacro:macro>
+
+  <xacro:macro name="easyarm_inertial" params="name inertials">
+    <xacro:property name="I" value="${inertials[name]}" lazy_eval="false" />
+    <inertial>
+      <xacro:easyarm_origin origin="${I.origin}" />
+      <mass value="${I.mass}" />
+      <inertia
+        ixx="${I.inertia.ixx}"
+        ixy="${I.inertia.ixy}"
+        ixz="${I.inertia.ixz}"
+        iyy="${I.inertia.iyy}"
+        iyz="${I.inertia.iyz}"
+        izz="${I.inertia.izz}" />
+    </inertial>
+  </xacro:macro>
+
+  <xacro:macro name="easyarm_link" params="name links inertials">
+    <xacro:property name="L" value="${links[name]}" lazy_eval="false" />
+    <link name="${name}">
+      <xacro:easyarm_inertial name="${name}" inertials="${inertials}" />
+      <visual>
+        <xacro:easyarm_origin origin="${L.visual.origin}" />
+        <geometry>
+          <mesh filename="${L.mesh}" />
+        </geometry>
+        <material name="">
+          <color rgba="${L.visual.color[0]} ${L.visual.color[1]} ${L.visual.color[2]} ${L.visual.color[3]}" />
+        </material>
+      </visual>
+      <collision>
+        <xacro:easyarm_origin origin="${L.collision.origin}" />
+        <geometry>
+          <mesh filename="${L.mesh}" />
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="easyarm_joint" params="name joints">
+    <xacro:property name="J" value="${joints[name]}" lazy_eval="false" />
+    <joint name="${name}" type="${J.type}">
+      <xacro:easyarm_origin origin="${J.origin}" />
+      <parent link="${J.parent}" />
+      <child link="${J.child}" />
+      <axis xyz="${J.axis[0]} ${J.axis[1]} ${J.axis[2]}" />
+      <limit
+        lower="${J.limit.lower}"
+        upper="${J.limit.upper}"
+        effort="${J.limit.effort}"
+        velocity="${J.limit.velocity}" />
+    </joint>
+  </xacro:macro>
+</robot>

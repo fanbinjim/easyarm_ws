@@ -15,7 +15,7 @@
                 <param name="gravity_compensation_scale">1.0</param>
                 <param name="idle_kd">4.0</param>
                 <param name="drag_gravity_scale">1.0</param>
-                <param name="drag_kd">0.00</param>
+                <param name="drag_kd">0.10</param>
                 <param name="control_torque_limit_scale">1.0</param>
                 <param name="position_kp">50.0</param>
                 <param name="position_kd">4.0</param>

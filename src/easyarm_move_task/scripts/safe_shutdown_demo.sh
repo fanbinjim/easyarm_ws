@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PACKAGE_NAME="easyarm_a1_moveit_config"
+DEFAULT_PACKAGE_NAMES=(
+  "easyarm_a1_moveit_config"
+  "easyarm_a1_h0616_moveit_config"
+)
+PACKAGE_NAMES_TEXT="${EASYARM_MOVEIT_CONFIG_PACKAGES:-${DEFAULT_PACKAGE_NAMES[*]}}"
+read -r -a PACKAGE_NAMES <<< "${PACKAGE_NAMES_TEXT}"
 LAUNCH_FILE="demo.launch.py"
 CONTROLLER_MANAGER="/controller_manager"
 ARM_CONTROLLER="arm_controller"
@@ -9,14 +14,23 @@ HARDWARE_COMPONENT="EasyArmHardware"
 TERM_TIMEOUT_SECONDS=10
 KILL_TIMEOUT_SECONDS=3
 FORCE_KILL_ON_DISABLE_FAILURE="${FORCE_KILL_ON_DISABLE_FAILURE:-0}"
+SKIP_MOVE_TO_READY="${SKIP_MOVE_TO_READY:-0}"
+SKIP_HARDWARE_DISABLE="${SKIP_HARDWARE_DISABLE:-0}"
 
 log() {
   printf '[safe_shutdown_demo] %s\n' "$*"
 }
 
 find_demo_launch_pids() {
-  pgrep -f "ros2 launch ${PACKAGE_NAME} ${LAUNCH_FILE}" || true
-  pgrep -f "${PACKAGE_NAME}.*${LAUNCH_FILE}" || true
+  local package_name
+
+  for package_name in "${PACKAGE_NAMES[@]}"; do
+    pgrep -f "ros2 launch ${package_name} ${LAUNCH_FILE}" || true
+    pgrep -f "${package_name}.*${LAUNCH_FILE}" || true
+  done
+
+  pgrep -f "ros2 launch easyarm.*moveit_config ${LAUNCH_FILE}" || true
+  pgrep -f "easyarm.*moveit_config.*${LAUNCH_FILE}" || true
 }
 
 collect_descendants() {
@@ -81,24 +95,32 @@ disable_hardware() {
   fi
 }
 
-log "Moving arm to ready before shutdown..."
-if ! ros2 run easyarm_move_task move_to_ready; then
-  log "move_to_ready failed. Shutdown aborted so the arm is not left in an unknown state."
-  exit 1
-fi
-
-if ! disable_hardware; then
-  log "Failed to disable hardware through ros2_control."
-  if [[ "${FORCE_KILL_ON_DISABLE_FAILURE}" != "1" ]]; then
-    log "Shutdown aborted before killing demo processes. Set FORCE_KILL_ON_DISABLE_FAILURE=1 to force process cleanup anyway."
+if [[ "${SKIP_MOVE_TO_READY}" == "1" ]]; then
+  log "SKIP_MOVE_TO_READY=1 set. Skipping motion to ready."
+else
+  log "Moving arm to ready before shutdown..."
+  if ! ros2 run easyarm_move_task move_to_ready; then
+    log "move_to_ready failed. Shutdown aborted so the arm is not left in an unknown state."
     exit 1
   fi
-  log "FORCE_KILL_ON_DISABLE_FAILURE=1 set. Continuing to kill demo processes."
+fi
+
+if [[ "${SKIP_HARDWARE_DISABLE}" == "1" ]]; then
+  log "SKIP_HARDWARE_DISABLE=1 set. Skipping ros2_control hardware shutdown."
+else
+  if ! disable_hardware; then
+    log "Failed to disable hardware through ros2_control."
+    if [[ "${FORCE_KILL_ON_DISABLE_FAILURE}" != "1" ]]; then
+      log "Shutdown aborted before killing demo processes. Set FORCE_KILL_ON_DISABLE_FAILURE=1 to force process cleanup anyway."
+      exit 1
+    fi
+    log "FORCE_KILL_ON_DISABLE_FAILURE=1 set. Continuing to kill demo processes."
+  fi
 fi
 
 mapfile -t launch_pids < <(find_demo_launch_pids | sort -u)
 if (( ${#launch_pids[@]} == 0 )); then
-  log "No running ${PACKAGE_NAME} ${LAUNCH_FILE} process found."
+  log "No running EasyArm MoveIt ${LAUNCH_FILE} process found."
   exit 0
 fi
 

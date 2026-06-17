@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ass_easyarm_a1_h0617">
+  <xacro:arg name="config_root" default="../config/h0617_cali" />
+
+  <xacro:include filename="easyarm_a1_h0617_macro.xacro" />
+
+  <xacro:property name="links" value="${xacro.load_yaml('$(arg config_root)/links.yaml')}" />
+  <xacro:property name="inertials" value="${xacro.load_yaml('$(arg config_root)/inertials.yaml')}" />
+  <xacro:property name="joints" value="${xacro.load_yaml('$(arg config_root)/joints.yaml')}" />
+
+  <xacro:easyarm_link name="base_link" links="${links}" inertials="${inertials}" />
+  <xacro:easyarm_link name="Link1" links="${links}" inertials="${inertials}" />
+  <xacro:easyarm_joint name="Joint1" joints="${joints}" />
+  <xacro:easyarm_link name="Link2" links="${links}" inertials="${inertials}" />
+  <xacro:easyarm_joint name="Joint2" joints="${joints}" />
+  <xacro:easyarm_link name="Link3" links="${links}" inertials="${inertials}" />
+  <xacro:easyarm_joint name="Joint3" joints="${joints}" />
+  <xacro:easyarm_link name="Link4" links="${links}" inertials="${inertials}" />
+  <xacro:easyarm_joint name="Joint4" joints="${joints}" />
+  <xacro:easyarm_link name="Link5" links="${links}" inertials="${inertials}" />
+  <xacro:easyarm_joint name="Joint5" joints="${joints}" />
+  <xacro:easyarm_link name="Link6" links="${links}" inertials="${inertials}" />
+  <xacro:easyarm_joint name="Joint6" joints="${joints}" />
+</robot>

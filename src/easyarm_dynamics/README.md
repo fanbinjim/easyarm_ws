@@ -25,6 +25,9 @@
 
 ```text
 easyarm_dynamics/
+  calibration/
+    mass_com_calibration.py
+  calibration_results/
   include/easyarm_dynamics/
     robot_model.hpp
   src/
@@ -46,6 +49,8 @@ sudo apt-get install -y ros-humble-pinocchio
 - `ament_cmake`
 - `Eigen3`
 - `pinocchio`
+- `rclpy` / `control_msgs` / `sensor_msgs` / `trajectory_msgs`（质量/质心标定脚本）
+- `python3-numpy` / `python3-scipy` / `python3-yaml`（质量/质心标定脚本）
 
 ## 编译
 
@@ -125,3 +130,51 @@ Eigen::Index nv() const noexcept;
 - 面向 controller 的动力学缓存层
 
 控制器本身建议放在独立控制包中，通过 `easyarm_dynamics::RobotModel` 获取动力学量。
+
+## 质量/质心标定工具
+
+`calibration/mass_com_calibration.py` 会通过 `/arm_controller/follow_joint_trajectory`
+移动机械臂到一组静态姿态，从 `/joint_states` 采集实际关节角和力矩，并用 Pinocchio
+RNEA 拟合 `Link2`-`Link6` 的质量和质心。该工具只输出 YAML，不会修改硬件配置。
+默认输出目录为 `src/easyarm_dynamics/calibration_results`。
+每次保存标定 YAML 时，脚本也会额外输出同名 `_config/` 目录，格式与
+`easyarm_description/config/h0617` 一致，可直接作为 H0617 xacro 的 `config_root`。
+
+当前标定约束：
+
+- 优化 `mass`
+- 优化 `COM.y` / `COM.z`
+- 固定 `COM.x` 为 URDF 中的原始值
+
+默认 `full` 采样使用 `10°` 间隔：
+
+- `Joint2`、`Joint3` 单关节扫描范围为 `-90° ~ 90°`
+- `Joint2 + Joint3` 联合扫描时，如果 `Joint2 > 0`，约束 `Joint2 - Joint3 < 90°`
+- `Joint2 + Joint3` 联合扫描时，如果 `Joint2 < 0`，约束 `Joint2 - Joint3 > -90°`
+- `Joint4 + Joint5` 联合扫描范围为 `-90° ~ 90°` 的任意组合
+
+查看默认采样点：
+
+```bash
+ros2 run easyarm_dynamics mass_com_calibration --dry-run-configs
+```
+
+真机采集并优化：
+
+```bash
+ros2 run easyarm_dynamics mass_com_calibration --mode full --yes
+```
+
+中断后继续：
+
+```bash
+ros2 run easyarm_dynamics mass_com_calibration --mode full --resume --yes
+```
+
+只使用已有 JSONL 数据重新优化：
+
+```bash
+ros2 run easyarm_dynamics mass_com_calibration \
+  --optimize-only \
+  --data-file src/easyarm_dynamics/calibration_results/mass_com_calibration_data.jsonl
+```

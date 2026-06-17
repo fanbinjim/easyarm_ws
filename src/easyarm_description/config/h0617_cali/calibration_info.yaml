@@ -1,0 +1,5 @@
+source_calibration_yaml: src/easyarm_dynamics/calibration_results/easyarm_a1_h0616_mass_com_params_20260616_182807.yaml
+source_template_config: /home/linx/easyarm_ws/src/easyarm_description/config/h0617
+generated_at: '2026-06-17 09:37:27'
+note: Config export for easyarm_description h0617 xacro; inertia matrices are copied
+  from the template config.

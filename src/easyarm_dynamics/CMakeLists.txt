@@ -55,6 +55,13 @@ install(
   DESTINATION include
 )
 
+install(
+  PROGRAMS
+    calibration/mass_com_calibration.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME mass_com_calibration
+)
+
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(Eigen3 pinocchio)
 ament_export_include_directories(include)
