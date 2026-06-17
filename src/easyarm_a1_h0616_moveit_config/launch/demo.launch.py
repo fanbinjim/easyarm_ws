@@ -15,6 +15,10 @@ def generate_launch_description():
                 "use_mock_hardware": use_mock_hardware,
             }
         )
+        .planning_pipelines(
+            default_planning_pipeline="ompl",
+            pipelines=["ompl", "pilz_industrial_motion_planner"],
+        )
         .to_moveit_configs()
     )
     launch_description = generate_demo_launch(moveit_config)

@@ -1,0 +1,6 @@
+---
+bool success
+string message
+string mode
+bool busy
+string active_task
