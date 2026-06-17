@@ -1,13 +1,13 @@
 moveit_setup_assistant_config:
   urdf:
     package: easyarm_description
-    relative_path: urdf/easyarm_a1_h0521.urdf
+    relative_path: urdf/easyarm_a1_h0616.urdf
   srdf:
-    relative_path: config/EasyARM-A1.srdf
+    relative_path: config/easyarm_a1.srdf
   package_settings:
-    author_name: fanbin
-    author_email: fanbinjim@qq.com
-    generated_timestamp: 1779350413
+    author_name: easyarm
+    author_email: easyarm@easyarm.com
+    generated_timestamp: 1781593148
   control_xacro:
     command:
       - position

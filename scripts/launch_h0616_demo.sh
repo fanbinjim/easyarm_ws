@@ -13,11 +13,11 @@
 # Warning:
 #   Without use_mock_hardware:=true, this launch file uses real EasyArm
 #   hardware, matching:
-#     ros2 launch easyarm_a1_h0616_moveit_config demo.launch.py
+#     ros2 launch easyarm_a1_moveit_config demo.launch.py
 #
 # This wrapper enters the workspace, sources install/setup.bash when present,
 # and forwards all arguments to:
-#   ros2 launch easyarm_a1_h0616_moveit_config demo.launch.py "$@"
+#   ros2 launch easyarm_a1_moveit_config demo.launch.py "$@"
 
 set -euo pipefail
 
@@ -32,4 +32,4 @@ if [ -f "${WORKSPACE_DIR}/install/setup.bash" ]; then
   set -u
 fi
 
-exec ros2 launch easyarm_a1_h0616_moveit_config demo.launch.py "$@"
+exec ros2 launch easyarm_a1_moveit_config demo.launch.py "$@"

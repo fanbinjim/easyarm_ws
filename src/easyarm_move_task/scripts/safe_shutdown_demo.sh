@@ -3,11 +3,15 @@ set -euo pipefail
 
 DEFAULT_PACKAGE_NAMES=(
   "easyarm_a1_moveit_config"
-  "easyarm_a1_h0616_moveit_config"
+)
+DEFAULT_LAUNCH_TARGETS=(
+  "easyarm_a1_bringup:bringup.launch.py"
+  "easyarm_a1_moveit_config:demo.launch.py"
 )
 PACKAGE_NAMES_TEXT="${EASYARM_MOVEIT_CONFIG_PACKAGES:-${DEFAULT_PACKAGE_NAMES[*]}}"
+LAUNCH_TARGETS_TEXT="${EASYARM_LAUNCH_TARGETS:-${DEFAULT_LAUNCH_TARGETS[*]}}"
 read -r -a PACKAGE_NAMES <<< "${PACKAGE_NAMES_TEXT}"
-LAUNCH_FILE="demo.launch.py"
+read -r -a LAUNCH_TARGETS <<< "${LAUNCH_TARGETS_TEXT}"
 CONTROLLER_MANAGER="/controller_manager"
 ARM_CONTROLLER="arm_controller"
 HARDWARE_COMPONENT="EasyArmHardware"
@@ -21,16 +25,29 @@ log() {
   printf '[safe_shutdown_demo] %s\n' "$*"
 }
 
-find_demo_launch_pids() {
+find_easyarm_launch_pids() {
   local package_name
+  local launch_file
+  local target
 
   for package_name in "${PACKAGE_NAMES[@]}"; do
-    pgrep -f "ros2 launch ${package_name} ${LAUNCH_FILE}" || true
-    pgrep -f "${package_name}.*${LAUNCH_FILE}" || true
+    launch_file="demo.launch.py"
+    pgrep -f "ros2 launch ${package_name} ${launch_file}" || true
+    pgrep -f "${package_name}.*${launch_file}" || true
   done
 
-  pgrep -f "ros2 launch easyarm.*moveit_config ${LAUNCH_FILE}" || true
-  pgrep -f "easyarm.*moveit_config.*${LAUNCH_FILE}" || true
+  for target in "${LAUNCH_TARGETS[@]}"; do
+    package_name="${target%%:*}"
+    launch_file="${target#*:}"
+    [[ -z "${package_name}" || -z "${launch_file}" || "${package_name}" == "${launch_file}" ]] && continue
+    pgrep -f "ros2 launch ${package_name} ${launch_file}" || true
+    pgrep -f "${package_name}.*${launch_file}" || true
+  done
+
+  pgrep -f "ros2 launch easyarm.*bringup bringup.launch.py" || true
+  pgrep -f "easyarm.*bringup.*bringup.launch.py" || true
+  pgrep -f "ros2 launch easyarm.*moveit_config demo.launch.py" || true
+  pgrep -f "easyarm.*moveit_config.*demo.launch.py" || true
 }
 
 collect_descendants() {
@@ -118,9 +135,9 @@ else
   fi
 fi
 
-mapfile -t launch_pids < <(find_demo_launch_pids | sort -u)
+mapfile -t launch_pids < <(find_easyarm_launch_pids | sort -u)
 if (( ${#launch_pids[@]} == 0 )); then
-  log "No running EasyArm MoveIt ${LAUNCH_FILE} process found."
+  log "No running EasyArm launch process found."
   exit 0
 fi
 
@@ -135,15 +152,15 @@ done
 
 mapfile -t all_pids < <(printf '%s\n' "${all_pids[@]}" | sort -rn -u)
 if (( ${#all_pids[@]} == 0 )); then
-  log "No demo process tree remains after moving to ready."
+  log "No EasyArm launch process tree remains after moving to ready."
   exit 0
 fi
 
-log "Sending SIGTERM to demo process tree: ${all_pids[*]}"
+log "Sending SIGTERM to EasyArm launch process tree: ${all_pids[*]}"
 kill -TERM "${all_pids[@]}" 2>/dev/null || true
 
 if wait_for_exit "${TERM_TIMEOUT_SECONDS}" "${all_pids[@]}"; then
-  log "Demo process tree stopped cleanly."
+  log "EasyArm launch process tree stopped cleanly."
   exit 0
 fi
 
@@ -152,7 +169,7 @@ log "Some processes did not exit after ${TERM_TIMEOUT_SECONDS}s. Sending SIGKILL
 kill -KILL "${remaining_pids[@]}" 2>/dev/null || true
 
 if wait_for_exit "${KILL_TIMEOUT_SECONDS}" "${remaining_pids[@]}"; then
-  log "Demo process tree stopped."
+  log "EasyArm launch process tree stopped."
   exit 0
 fi
 

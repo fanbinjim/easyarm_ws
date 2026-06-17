@@ -4,9 +4,9 @@
   <name>easyarm_a1_moveit_config</name>
   <version>0.3.0</version>
   <description>
-     An automatically generated package with all the configuration and launch files for using the EasyARM-A1 with the MoveIt Motion Planning Framework
+     An automatically generated package with all the configuration and launch files for using the easyarm_a1 with the MoveIt Motion Planning Framework
   </description>
-  <maintainer email="fanbinjim@qq.com">fanbin</maintainer>
+  <maintainer email="easyarm@easyarm.com">easyarm</maintainer>
 
   <license>BSD</license>
 
@@ -14,7 +14,7 @@
   <url type="bugtracker">https://github.com/ros-planning/moveit2/issues</url>
   <url type="repository">https://github.com/ros-planning/moveit2</url>
 
-  <author email="fanbinjim@qq.com">fanbin</author>
+  <author email="easyarm@easyarm.com">easyarm</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

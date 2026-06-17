@@ -10,7 +10,7 @@ def generate_launch_description():
     use_mock_hardware = LaunchConfiguration("use_mock_hardware", default="false")
 
     moveit_config = (
-        MoveItConfigsBuilder("easyarm_a1", package_name="easyarm_a1_h0616_moveit_config")
+        MoveItConfigsBuilder("easyarm_a1", package_name="easyarm_a1_moveit_config")
         .robot_description(
             mappings={
                 "debug_enable": debug_enable,

@@ -177,7 +177,7 @@ data/joint_zero_calibration/YYYYMMDD/HHMMSS/
   reprojection_preview/
 ```
 
-`joint_zero_offsets.yaml` 会给出建议写入 `EasyARM-A1.ros2_control.xacro` 的 `position_offset`。程序不会自动修改 xacro。
+`joint_zero_offsets.yaml` 会给出建议写入 `easyarm_a1.ros2_control.xacro` 的 `position_offset`。程序不会自动修改 xacro。
 
 重投影预览图中：
 

@@ -45,20 +45,18 @@ get-pose
 
 ## 测试前启动
 
-先启动 h0616 MoveIt 配置和 motion server。
+先启动 `easyarm_a1_bringup`。它会同时启动 MoveIt、ros2_control、controllers 和 `easyarm_motion_server`。
 
 Mock：
 
 ```bash
-ros2 launch easyarm_a1_h0616_moveit_config demo.launch.py use_mock_hardware:=true
-ros2 launch easyarm_motion_server h0616.launch.py use_mock_hardware:=true
+ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true
 ```
 
 真实硬件：
 
 ```bash
-ros2 launch easyarm_a1_h0616_moveit_config demo.launch.py
-ros2 launch easyarm_motion_server h0616.launch.py
+ros2 launch easyarm_a1_bringup bringup.launch.py
 ```
 
 真实硬件启动前需要先配置 `can0`：

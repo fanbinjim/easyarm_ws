@@ -1,13 +1,13 @@
 # easyarm_a1_bringup
 
 `easyarm_a1_bringup` 是 EasyArm A1 的主启动入口。它读取
-`easyarm_a1_h0616_moveit_config` 中的 URDF、SRDF、controller 和 MoveIt
+`easyarm_a1_moveit_config` 中的 URDF、SRDF、controller 和 MoveIt
 规划配置，但不会 include `demo.launch.py`。
 
 同一时间不要同时启动：
 
 ```bash
-ros2 launch easyarm_a1_h0616_moveit_config demo.launch.py
+ros2 launch easyarm_a1_moveit_config demo.launch.py
 ```
 
 `demo.launch.py` 会启动另一套 `robot_state_publisher`、`ros2_control_node`、
@@ -87,4 +87,24 @@ arm_controller active
 ros2 run easyarm_app easyarm get-state
 ros2 run easyarm_app easyarm get-joints
 ros2 run easyarm_app easyarm get-pose
+```
+
+## Safe Shutdown
+
+`safe_shutdown.sh` 会依次停止当前运动、切到 `POSITION`、运动到 ready 位、停用
+`arm_controller`、禁用 `EasyArmHardware`，最后关闭 `bringup.launch.py` 或
+`demo.launch.py` 进程树。
+
+真实硬件上执行前确认机械臂运动路径安全：
+
+```bash
+ros2 run easyarm_a1_bringup safe_shutdown.sh
+```
+
+调试时可以跳过部分步骤：
+
+```bash
+SKIP_MOVE_READY=1 ros2 run easyarm_a1_bringup safe_shutdown.sh
+SKIP_HARDWARE_DISABLE=1 ros2 run easyarm_a1_bringup safe_shutdown.sh
+SKIP_KILL_LAUNCH=1 ros2 run easyarm_a1_bringup safe_shutdown.sh
 ```

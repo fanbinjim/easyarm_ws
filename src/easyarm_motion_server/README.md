@@ -35,9 +35,11 @@ planning_pipeline_id=pilz_industrial_motion_planner
 
 第一版不封装 ServoJ/ServoL，遥操后续继续接 MoveIt Servo 原生接口。
 
-## h0616 启动流程
+## 启动流程
 
-后续默认使用 `easyarm_a1_h0616_moveit_config`。不要裸跑 `ros2 run easyarm_motion_server easyarm_motion_server`，推荐使用本包的 h0616 launch，让 motion server 获得 h0616 的 `robot_description`、SRDF、kinematics 和 Pilz pipeline 参数。
+默认通过 `easyarm_a1_bringup` 启动完整运行链路。不要裸跑 `ros2 run easyarm_motion_server easyarm_motion_server`，也不要在 `easyarm_a1_bringup` 已经运行时再启动 `easyarm_motion_server/launch/h0616.launch.py`，否则会出现重复的 `/easyarm/movej` action server。
+
+`h0616.launch.py` 仅作为兼容/调试入口保留，用于已经单独启动 MoveIt 和 ros2_control 时给 motion server 注入 `robot_description`、SRDF、kinematics 和 Pilz pipeline 参数。
 
 ### 构建
 
@@ -45,7 +47,8 @@ planning_pipeline_id=pilz_industrial_motion_planner
 cd ~/easyarm_ws
 colcon build --packages-select \
   easyarm_interfaces \
-  easyarm_a1_h0616_moveit_config \
+  easyarm_a1_moveit_config \
+  easyarm_a1_bringup \
   easyarm_motion_server \
   easyarm_app
 source install/setup.bash
@@ -53,23 +56,15 @@ source install/setup.bash
 
 ### Mock 测试
 
-终端 1，启动 MoveIt + ros2_control mock：
+终端 1，启动 bringup：
 
 ```bash
 cd ~/easyarm_ws
 source install/setup.bash
-ros2 launch easyarm_a1_h0616_moveit_config demo.launch.py use_mock_hardware:=true
+ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true
 ```
 
-终端 2，启动 motion server：
-
-```bash
-cd ~/easyarm_ws
-source install/setup.bash
-ros2 launch easyarm_motion_server h0616.launch.py use_mock_hardware:=true
-```
-
-终端 3，查询状态：
+终端 2，查询状态：
 
 ```bash
 cd ~/easyarm_ws
@@ -129,18 +124,10 @@ sudo ip link set can0 up
 ```bash
 cd ~/easyarm_ws
 source install/setup.bash
-ros2 launch easyarm_a1_h0616_moveit_config demo.launch.py
+ros2 launch easyarm_a1_bringup bringup.launch.py
 ```
 
-终端 2：
-
-```bash
-cd ~/easyarm_ws
-source install/setup.bash
-ros2 launch easyarm_motion_server h0616.launch.py
-```
-
-终端 3，先查状态，再低速小幅测试：
+终端 2，先查状态，再低速小幅测试：
 
 ```bash
 cd ~/easyarm_ws
@@ -157,14 +144,14 @@ ros2 run easyarm_app easyarm movej 0.0 1.85 2.69 0.96 1.57 0.0 \
 
 ### MoveJ planning failed，日志里有 acceleration limit not set
 
-Pilz 需要关节加速度限制。确认 `easyarm_a1_h0616_moveit_config/config/joint_limits.yaml` 中每个关节都是：
+Pilz 需要关节加速度限制。确认 `easyarm_a1_moveit_config/config/joint_limits.yaml` 中每个关节都是：
 
 ```yaml
 has_acceleration_limits: true
 max_acceleration: 8.0
 ```
 
-修改后需要重新构建并重启 `demo.launch.py` 和 `h0616.launch.py`。
+修改后需要重新构建并重启 `easyarm_a1_bringup`。
 
 ### mode 显示 UNKNOWN
 

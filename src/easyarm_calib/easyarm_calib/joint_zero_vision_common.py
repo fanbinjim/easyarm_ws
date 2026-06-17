@@ -16,7 +16,7 @@ CAMERA_INTRINSICS = Path(
     "data/camera_calibration/MER2-301-125U3M_FCZ21070977/20260526_171222/camera_calibration.yaml"
 )
 URDF_PATH = Path("src/easyarm_description/urdf/easyarm_a1_h0521.urdf")
-ROS2_CONTROL_XACRO = Path("src/easyarm_a1_moveit_config/config/EasyARM-A1.ros2_control.xacro")
+ROS2_CONTROL_XACRO = Path("src/easyarm_a1_moveit_config/config/easyarm_a1.ros2_control.xacro")
 
 CHESSBOARD_COLS = 11
 CHESSBOARD_ROWS = 8

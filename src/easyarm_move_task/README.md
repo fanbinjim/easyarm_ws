@@ -102,7 +102,7 @@ ros2 run easyarm_move_task easyarm_playback data/path_record/20260525/19-50-13.j
 
 ### safe_shutdown_demo.sh
 
-安全关机脚本：先 `move_to_ready`，再停 `arm_controller`、禁用 hardware，最后终止 demo 进程树。
+安全关机脚本：先 `move_to_ready`，再停 `arm_controller`、禁用 hardware，最后终止 `easyarm_a1_bringup bringup.launch.py` 或 `easyarm_a1_moveit_config demo.launch.py` 进程树。
 
 ```bash
 ./install/easyarm_move_task/lib/easyarm_move_task/safe_shutdown_demo.sh
@@ -116,7 +116,7 @@ ros2 run easyarm_move_task easyarm_playback data/path_record/20260525/19-50-13.j
 
 ## 相关参数
 
-控制模式切换的参数定义在 `src/easyarm_a1_moveit_config/config/EasyARM-A1.ros2_control.xacro`：
+控制模式切换的参数定义在 `src/easyarm_a1_moveit_config/config/easyarm_a1.ros2_control.xacro`：
 
 ```xml
 <param name="hardware_control_mode">position</param>

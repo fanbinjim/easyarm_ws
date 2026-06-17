@@ -44,7 +44,7 @@ ros2 param get /easyarm_hardware_control_mode controller_mode
 - `enable_gravity_compensation=true`。
 - `RobotModel` 已经从 `urdf_path` 成功加载。
 
-相关参数在 `src/easyarm_a1_moveit_config/config/EasyARM-A1.ros2_control.xacro`：
+相关参数在 `src/easyarm_a1_moveit_config/config/easyarm_a1.ros2_control.xacro`：
 
 ```xml
 <param name="hardware_control_mode">position</param>
@@ -59,7 +59,7 @@ ros2 param get /easyarm_hardware_control_mode controller_mode
 
 `easyarm_hardware` 可选启用二进制调试日志。开启后，hardware `write()` 线程只把固定大小 sample 写入预分配 ring buffer，后台线程批量落盘；ring buffer 满时丢日志并计数，不阻塞 CAN 发送。
 
-硬件参数在 `src/easyarm_a1_moveit_config/config/EasyARM-A1.ros2_control.xacro`：
+硬件参数在 `src/easyarm_a1_moveit_config/config/easyarm_a1.ros2_control.xacro`：
 
 ```xml
 <param name="debug_enable">${debug_enable}</param>

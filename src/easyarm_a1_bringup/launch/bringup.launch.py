@@ -27,7 +27,7 @@ def generate_launch_description():
     )
 
     moveit_config = (
-        MoveItConfigsBuilder("easyarm_a1", package_name="easyarm_a1_h0616_moveit_config")
+        MoveItConfigsBuilder("easyarm_a1", package_name="easyarm_a1_moveit_config")
         .robot_description(
             mappings={
                 "debug_enable": debug_enable,
@@ -83,7 +83,7 @@ def generate_launch_description():
         parameters=[
             moveit_config.robot_description,
             os.path.join(
-                get_package_share_directory("easyarm_a1_h0616_moveit_config"),
+                get_package_share_directory("easyarm_a1_moveit_config"),
                 "config",
                 "ros2_controllers.yaml",
             ),
@@ -135,7 +135,7 @@ def generate_launch_description():
         arguments=[
             "-d",
             os.path.join(
-                get_package_share_directory("easyarm_a1_h0616_moveit_config"),
+                get_package_share_directory("easyarm_a1_moveit_config"),
                 "config",
                 "moveit.rviz",
             ),

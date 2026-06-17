@@ -1,31 +1,34 @@
 # easyarm_a1_moveit_config
 
-EasyARM-A1 的 MoveIt 配置包，`demo.launch.py` 会启动 MoveIt、RViz、`ros2_control_node`
-以及默认控制器。
+`easyarm_a1_moveit_config` 是 EasyArm A1 当前正式 MoveIt 配置包。它保留 H0616
+机器人描述和 ros2_control 配置，并作为 `easyarm_a1_bringup` 的配置来源。
 
-## 启动 Demo
+本包主要提供 URDF xacro、SRDF、controller 配置、joint limits、kinematics、OMPL
+和 Pilz planning pipeline 配置。日常启动推荐使用 `easyarm_a1_bringup`，不要把
+`demo.launch.py` 和 `easyarm_a1_bringup` 同时启动。
 
-构建并加载 workspace overlay 后运行：
+## Build
 
 ```bash
-colcon build --packages-up-to easyarm_a1_moveit_config
+colcon build --packages-select easyarm_a1_moveit_config
 source install/setup.bash
-ros2 launch easyarm_a1_moveit_config demo.launch.py
 ```
 
-当前 ros2_control 配置默认使用真实硬件：
+## 推荐启动方式
 
-- CAN 接口：`can0`
-- 硬件插件：`easyarm_hardware/EasyArmHardware`
-- `use_mock_hardware=false`
-
-如需使用硬件插件内置的 mock 模式，不连接 CAN，可启动：
+Mock：
 
 ```bash
-ros2 launch easyarm_a1_moveit_config demo.launch.py use_mock_hardware:=true
+ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true
 ```
 
-启动前请确认机械臂处于安全状态，并已配置 SocketCAN：
+真实硬件：
+
+```bash
+ros2 launch easyarm_a1_bringup bringup.launch.py
+```
+
+真实硬件启动前需要先配置 SocketCAN：
 
 ```bash
 sudo ip link set can0 down
@@ -33,28 +36,27 @@ sudo ip link set can0 type can bitrate 1000000
 sudo ip link set can0 up
 ```
 
-## 调试日志参数
+## 直接启动 demo
 
-`demo.launch.py` 支持 `debug_enable` 参数，用来控制
-`easyarm_hardware` 的二进制调试日志。
-
-默认关闭：
-
-```bash
-ros2 launch easyarm_a1_moveit_config demo.launch.py
-```
-
-显式关闭：
+`demo.launch.py` 是 MoveIt Setup Assistant 生成风格的调试入口，会启动
+`robot_state_publisher`、`ros2_control_node`、controllers、`move_group` 和 RViz。
+如果使用这个入口，不要同时启动 `easyarm_a1_bringup`。
 
 ```bash
-ros2 launch easyarm_a1_moveit_config demo.launch.py debug_enable:=false
+ros2 launch easyarm_a1_moveit_config demo.launch.py use_mock_hardware:=true
 ```
 
-开启：
+## 关键文件
 
-```bash
-ros2 launch easyarm_a1_moveit_config demo.launch.py debug_enable:=true
+```text
+config/easyarm_a1.urdf.xacro
+config/easyarm_a1.ros2_control.xacro
+config/easyarm_a1.srdf
+config/ros2_controllers.yaml
+config/moveit_controllers.yaml
+config/joint_limits.yaml
+config/pilz_industrial_motion_planner_planning.yaml
+config/pilz_cartesian_limits.yaml
 ```
 
-开启后，硬件插件会在激活时创建调试日志。日志路径和写入统计会打印在
-`ros2_control_node` 输出中；解码方式见 `easyarm_hardware` 包的 README。
+`use_mock_hardware` 默认值保持为 `false`，直接启动真实硬件前需要确认 CAN 和机械臂处于安全状态。
