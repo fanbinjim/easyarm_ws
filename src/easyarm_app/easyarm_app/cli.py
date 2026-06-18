@@ -3,6 +3,7 @@ import atexit
 import os
 import readline
 import shlex
+import subprocess
 import sys
 
 import rclpy
@@ -230,18 +231,38 @@ def _value_or_nan(values, index: int) -> float:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="EasyArm app CLI")
+    parser = argparse.ArgumentParser(
+        description="EasyArm app CLI",
+        epilog=(
+            "examples:\n"
+            "  movej 0.0025 0.25 2 0.1 -1.57 0.0\n"
+            "  movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0\n"
+            "  set-mode DRAG\n"
+            "  set-mode POSITION"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--timeout", type=float, default=5.0)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    movej = subparsers.add_parser("movej", help="Call /easyarm/movej")
+    movej = subparsers.add_parser(
+        "movej",
+        help="Call /easyarm/movej",
+        epilog="example:\n  movej 0.0025 0.25 2 0.1 -1.57 0.0",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     movej.add_argument("joints", nargs=6, type=float, metavar="J")
     movej.add_argument("--velocity-scale", type=float, default=0.2)
     movej.add_argument("--acceleration-scale", type=float, default=0.2)
     movej.add_argument("--plan-only", dest="execute", action="store_false")
     movej.set_defaults(execute=True)
 
-    movel = subparsers.add_parser("movel", help="Call /easyarm/movel")
+    movel = subparsers.add_parser(
+        "movel",
+        help="Call /easyarm/movel",
+        epilog="example:\n  movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     movel.add_argument("x", type=float)
     movel.add_argument("y", type=float)
     movel.add_argument("z", type=float)
@@ -255,7 +276,12 @@ def build_parser() -> argparse.ArgumentParser:
     movel.add_argument("--plan-only", dest="execute", action="store_false")
     movel.set_defaults(execute=True)
 
-    set_mode = subparsers.add_parser("set-mode", help="Call /easyarm/set_mode")
+    set_mode = subparsers.add_parser(
+        "set-mode",
+        help="Call /easyarm/set_mode",
+        epilog="examples:\n  set-mode DRAG\n  set-mode POSITION",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     set_mode.add_argument("mode", choices=["POSITION", "IDLE", "DRAG", "position", "idle", "drag"])
 
     subparsers.add_parser("stop", help="Call /easyarm/stop")
@@ -266,10 +292,16 @@ def build_parser() -> argparse.ArgumentParser:
     get_pose.add_argument("--target-frame", default="base_link")
     get_pose.add_argument("--source-frame", default="Link6")
 
+    safe_shutdown = subparsers.add_parser("safe_shutdown", help="Run safe shutdown and exit shell")
+    safe_shutdown.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to safe_shutdown.sh")
+
     return parser
 
 
 def run_command(node: EasyArmCli, args) -> int:
+    if args.command == "safe_shutdown":
+        node.get_logger().error("safe_shutdown is only supported by easyarm_shell")
+        return 1
     if args.command == "movej":
         return node.movej(args)
     if args.command == "movel":
@@ -315,6 +347,17 @@ def configure_readline_history(node: EasyArmCli) -> None:
         node.get_logger().warning(f"Command history disabled: {exception}")
 
 
+def run_safe_shutdown_command(node: EasyArmCli, extra_args) -> int:
+    command = ["ros2", "run", "easyarm_a1_bringup", "safe_shutdown.sh", *extra_args]
+    node.get_logger().info("Running safe shutdown")
+    node.get_logger().info("cmd: " + " ".join(shlex.quote(value) for value in command))
+    try:
+        return subprocess.call(command)
+    except FileNotFoundError:
+        node.get_logger().error("ros2 command not found")
+        return 1
+
+
 def shell_main() -> None:
     parser = build_parser()
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
@@ -337,6 +380,19 @@ def shell_main() -> None:
                 break
             if line in ("help", "?"):
                 parser.print_help()
+                continue
+            if line == "safe_shutdown" or line.startswith("safe_shutdown "):
+                try:
+                    extra_args = shlex.split(line)[1:]
+                except ValueError as exception:
+                    node.get_logger().error(str(exception))
+                    continue
+
+                return_code = run_safe_shutdown_command(node, extra_args)
+                if return_code == 0:
+                    node.get_logger().info("Safe shutdown completed. Exiting shell.")
+                    break
+                node.get_logger().error(f"Safe shutdown failed with exit code {return_code}")
                 continue
 
             try:
