@@ -157,9 +157,9 @@ max_acceleration: 8.0
 
 修改后需要重新构建并重启 `easyarm_a1_bringup`。
 
-### mode 显示 UNKNOWN
+### mode 查询失败
 
-`/easyarm/get_state` 中的 `mode` 是 motion server 内部缓存。刚启动且还没有通过 motion server 调过 `/easyarm/set_mode` 或 MoveJ/MoveL 触发过模式检查时，可能会显示 `UNKNOWN`。这不代表规划失败。
+`/easyarm/get_state` 会主动查询 `/easyarm_hardware_control_mode/get_parameters` 并返回当前硬件模式。刚启动时如果硬件模式参数服务还不可用，会返回失败信息，并保留 motion server 内部缓存模式。
 
 ### 查询当前关节和末端位姿
 

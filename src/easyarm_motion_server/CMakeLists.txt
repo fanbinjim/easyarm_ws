@@ -18,7 +18,18 @@ find_package(rcl_interfaces REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(easyarm_interfaces REQUIRED)
 
-add_executable(easyarm_motion_server src/easyarm_motion_server.cpp)
+add_executable(easyarm_motion_server
+  src/main.cpp
+  src/motion_server_node.cpp
+  src/joint_state_cache.cpp
+  src/hardware_mode_client.cpp
+  src/trajectory_sender.cpp
+  src/moveit_motion_executor.cpp)
+target_include_directories(
+  easyarm_motion_server
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(
   easyarm_motion_server
   rclcpp

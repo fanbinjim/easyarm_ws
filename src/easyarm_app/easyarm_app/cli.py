@@ -11,6 +11,7 @@ from easyarm_interfaces.srv import GetJoints, GetPose, GetState, SetMode, Stop
 from geometry_msgs.msg import PoseStamped
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 
 
 class EasyArmCli(Node):
@@ -108,6 +109,16 @@ class EasyArmCli(Node):
             effort = _value_or_nan(response.efforts, index)
             self._log_info(
                 f"{name}: position={position:.6f} velocity={velocity:.6f} effort={effort:.6f}")
+        joint_positions = {
+            name: _value_or_nan(response.positions, index)
+            for index, name in enumerate(response.names)
+        }
+        ordered_positions = [
+            joint_positions.get(f"Joint{index}", float("nan"))
+            for index in range(1, 7)
+        ]
+        self._log_info(
+            "cmd: " + " ".join(f"{position:.6f}" for position in ordered_positions))
         return 0 if response.success else 1
 
     def get_pose(self, args) -> int:
@@ -141,22 +152,42 @@ class EasyArmCli(Node):
             f"z={pose.pose.orientation.z:.6f} "
             f"w={pose.pose.orientation.w:.6f}"
         )
+        self._log_info(
+            "cmd: "
+            f"{pose.pose.position.x:.6f} "
+            f"{pose.pose.position.y:.6f} "
+            f"{pose.pose.position.z:.6f} "
+            f"{pose.pose.orientation.x:.6f} "
+            f"{pose.pose.orientation.y:.6f} "
+            f"{pose.pose.orientation.z:.6f} "
+            f"{pose.pose.orientation.w:.6f}"
+        )
         return 0 if response.success else 1
 
     def _send_action_goal(self, client, goal, timeout: float) -> int:
         goal_future = client.send_goal_async(goal)
-        if not _spin_until_complete(self, goal_future, timeout):
-            self.get_logger().error("Timeout waiting for goal response")
-            return 1
+        try:
+            if not _spin_until_complete(self, goal_future, timeout):
+                self.get_logger().error("Timeout waiting for goal response")
+                return 1
+        except KeyboardInterrupt:
+            self.get_logger().warning("Command interrupted before goal response")
+            raise
         goal_handle = goal_future.result()
         if goal_handle is None or not goal_handle.accepted:
             self.get_logger().error("Goal rejected")
             return 1
 
         result_future = goal_handle.get_result_async()
-        if not _spin_until_complete(self, result_future, None):
-            self.get_logger().error("Failed while waiting for result")
-            return 1
+        try:
+            if not _spin_until_complete(self, result_future, None):
+                self.get_logger().error("Failed while waiting for result")
+                return 1
+        except KeyboardInterrupt:
+            self.get_logger().warning("Command interrupted; canceling action goal")
+            cancel_future = goal_handle.cancel_goal_async()
+            _spin_until_complete(self, cancel_future, timeout)
+            raise
         wrapped_result = result_future.result()
         result = wrapped_result.result
         self._log_response(result.success, result.message)
@@ -265,7 +296,7 @@ def main(argv=None) -> int:
         return run_command(node, args)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 def console_main():
@@ -286,7 +317,7 @@ def configure_readline_history(node: EasyArmCli) -> None:
 
 def shell_main() -> None:
     parser = build_parser()
-    rclpy.init()
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = EasyArmCli()
     configure_readline_history(node)
     node.get_logger().info("EasyArm shell ready. Type 'help' for commands, 'exit' to quit.")
@@ -315,8 +346,12 @@ def shell_main() -> None:
 
             try:
                 run_command(node, args)
+            except KeyboardInterrupt:
+                print()
+                if rclpy.ok():
+                    node.get_logger().warning("Command interrupted")
             except Exception as exception:  # noqa: BLE001 - keep shell alive after command errors.
                 node.get_logger().error(str(exception))
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
