@@ -391,12 +391,23 @@ class EasyArmCli(Node):
         controller = SpeedJTeleopController(self)
         return controller.run()
 
+    def run_speedl_teleop(self) -> int:
+        if not self._require_position_mode(5.0):
+            return 1
+        if not self._start_moveit_servo(5.0):
+            return 1
+        if not self._wait_for_subscribers(self.speedl_pub, "/servo_node/delta_twist_cmds", 5.0):
+            return 1
+
+        controller = SpeedLTeleopController(self)
+        return controller.run()
+
 
 class RawTerminal:
     def __enter__(self):
         self.fd = sys.stdin.fileno()
         self.old_settings = termios.tcgetattr(self.fd)
-        tty.setcbreak(self.fd)
+        tty.setraw(self.fd)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -485,6 +496,111 @@ class SpeedJTeleopController:
             time.sleep(interval)
 
 
+class SpeedLTeleopController:
+    KEY_BINDINGS = {
+        "w": (1, 1),       # y+
+        "s": (1, -1),      # y-
+        "a": (0, -1),      # x-
+        "d": (0, 1),       # x+
+        " ": (2, 1),       # z+
+        "c": (2, -1),      # z-
+        "q": (4, -1),      # -wy
+        "e": (4, 1),       # +wy
+        "i": (3, -1),      # +x clockwise pitch up.
+        "k": (3, 1),       # +x counterclockwise pitch down.
+        "j": (5, -1),      # +z clockwise yaw left.
+        "l": (5, 1),       # +z counterclockwise yaw right.
+    }
+
+    def __init__(self, node: EasyArmCli):
+        self.node = node
+        self.rate_hz = 50.0
+        self.dt = 1.0 / self.rate_hz
+        self.max_linear_speed = 0.2
+        self.max_angular_speed = 0.3
+        self.linear_accel = 0.30
+        self.linear_decel = 0.40
+        self.angular_accel = 0.80
+        self.angular_decel = 1.50
+        self.key_timeout = 0.12
+        self.twist = [0.0] * 6
+        self.active_until = [0.0] * 6
+        self.target_signs = [0] * 6
+
+    def run(self) -> int:
+        self.node.get_logger().info(
+            "SpeedL teleop mode: wasd/space/c translate, q/e/ikjl rotate, Esc exits.")
+        self.node.get_logger().info(
+            "w y+, s y-, a x-, d x+, space z+, c z-.")
+        self.node.get_logger().info(
+            "q -wy, e +wy, i/k pitch around x, j/l yaw around z.")
+
+        try:
+            with RawTerminal() as terminal:
+                while rclpy.ok():
+                    start = time.monotonic()
+                    if self._handle_key(terminal.read_key(), start):
+                        break
+                    self._update_twist(start)
+                    self.node.speedl_pub.publish(self.node._make_twist(self.twist, "base_link"))
+                    sleep_time = self.dt - (time.monotonic() - start)
+                    if sleep_time > 0.0:
+                        time.sleep(sleep_time)
+        except KeyboardInterrupt:
+            print()
+        finally:
+            self._halt()
+            print()
+        return 0
+
+    def _handle_key(self, key, now: float) -> bool:
+        if key is None:
+            return False
+        if key in ("\x1b", "\x03"):
+            return True
+        binding = self.KEY_BINDINGS.get(key)
+        if binding is None:
+            return False
+        index, sign = binding
+        self.target_signs[index] = sign
+        self.active_until[index] = now + self.key_timeout
+        return False
+
+    def _update_twist(self, now: float) -> None:
+        for index in range(6):
+            if index < 3:
+                max_speed = self.max_linear_speed
+                accel = self.linear_accel
+                decel = self.linear_decel
+            else:
+                max_speed = self.max_angular_speed
+                accel = self.angular_accel
+                decel = self.angular_decel
+
+            if now <= self.active_until[index]:
+                target = self.target_signs[index] * max_speed
+                step = accel * self.dt
+            else:
+                target = 0.0
+                self.target_signs[index] = 0
+                step = decel * self.dt
+            self.twist[index] = _approach(self.twist[index], target, step)
+
+    def _halt(self) -> None:
+        interval = self.dt
+        while any(abs(value) > 1e-4 for value in self.twist):
+            next_twist = []
+            for index, value in enumerate(self.twist):
+                decel = self.linear_decel if index < 3 else self.angular_decel
+                next_twist.append(_approach(value, 0.0, decel * interval))
+            self.twist = next_twist
+            self.node.speedl_pub.publish(self.node._make_twist(self.twist, "base_link"))
+            time.sleep(interval)
+        for _ in range(4):
+            self.node.speedl_pub.publish(self.node._make_twist([0.0] * 6, "base_link"))
+            time.sleep(interval)
+
+
 def _spin_until_complete(node: Node, future, timeout):
     rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
     return future.done()
@@ -515,7 +631,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50\n"
             "  speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50\n"
             "  set-mode DRAG\n"
-            "  set-mode POSITION"
+            "  set-mode POSITION\n"
+            "  speedl_teleop    # in easyarm_shell: keyboard Cartesian teleop mode"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -605,6 +722,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run keyboard SpeedJ teleoperation in easyarm_shell",
     )
 
+    subparsers.add_parser(
+        "speedl_teleop",
+        help="Run keyboard SpeedL teleoperation in easyarm_shell",
+    )
+
     safe_shutdown = subparsers.add_parser("safe_shutdown", help="Run safe shutdown and exit shell")
     safe_shutdown.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to safe_shutdown.sh")
 
@@ -635,6 +757,9 @@ def run_command(node: EasyArmCli, args) -> int:
         return node.speedl(args)
     if args.command == "speedj_teleop":
         node.get_logger().error("speedj_teleop is only supported by easyarm_shell")
+        return 1
+    if args.command == "speedl_teleop":
+        node.get_logger().error("speedl_teleop is only supported by easyarm_shell")
         return 1
     raise RuntimeError(f"unknown command {args.command}")
 
@@ -703,6 +828,9 @@ def shell_main() -> None:
                 continue
             if line == "speedj_teleop":
                 node.run_speedj_teleop()
+                continue
+            if line == "speedl_teleop":
+                node.run_speedl_teleop()
                 continue
             if line == "safe_shutdown" or line.startswith("safe_shutdown "):
                 try:

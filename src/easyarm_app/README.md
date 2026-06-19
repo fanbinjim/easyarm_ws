@@ -31,6 +31,7 @@ easyarm> get-joints
 easyarm> get-pose
 easyarm> movej 0 0 2.35619 0.7854 -1.5708 0 --plan-only
 easyarm> speedj_teleop
+easyarm> speedl_teleop
 easyarm> exit
 ```
 
@@ -47,6 +48,7 @@ get-pose
 speedj
 speedl
 speedj_teleop
+speedl_teleop
 ```
 
 ## 测试前启动
@@ -167,3 +169,36 @@ Esc          -> 退出并发送零速度
 ```
 
 按住按键时速度会缓慢增加；松开后速度会快速回零，但不会瞬间归零。
+
+## 键盘 SpeedL 模式
+
+`easyarm_shell` 中输入 `speedl_teleop` 会进入键盘末端速度控制模式：
+
+```text
+easyarm> speedl_teleop
+```
+
+平移按键映射：
+
+```text
+w      -> y+
+s      -> y-
+a      -> x-
+d      -> x+
+Space  -> z+
+c      -> z-
+```
+
+旋转按键映射：
+
+```text
+q          -> 绕 y 顺时针
+e          -> 绕 y 逆时针
+i          -> 俯仰向上，绕 x 顺时针
+k          -> 俯仰向下
+j          -> 偏航向左，绕 z 顺时针
+l          -> 绕 z 逆时针
+Esc        -> 退出并发送零速度
+```
+
+速度方向基于 `base_link` 坐标系，底层发布 MoveIt Servo 的 `TwistStamped` 输入。
