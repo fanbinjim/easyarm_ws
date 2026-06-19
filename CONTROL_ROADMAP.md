@@ -24,12 +24,15 @@
   - `arm_controller` 是 `joint_trajectory_controller/JointTrajectoryController`。
 
 - `SpeedJ/SpeedL`
-  - `easyarm_app` 目前直接调用 MoveIt Servo 原生接口。
-  - 输入 topic 是 `/servo_node/delta_joint_cmds` 和 `/servo_node/delta_twist_cmds`。
-  - MoveIt Servo 当前输出 `trajectory_msgs/JointTrajectory` 到 `/arm_controller/joint_trajectory`。
-  - 为了让 JTC 稳定接收短轨迹，`publish_period` 当前配置为 `0.02s`，也就是 50Hz。
-  - 这条链路可以验证速度方向、IK、奇异点处理、碰撞减速和 joint limit，但没有用上 MoveIt Servo 的高频输出能力。
-  - 如果直接把 MoveIt Servo 高频 `JointTrajectory` 输出接到 JTC，容易出现抖动异常。
+  - `easyarm_app` 发布 `/easyarm/speedj_cmd` 和 `/easyarm/speedl_cmd`。
+  - `easyarm_motion_server` 接收 EasyArm 自己的 speed topic。
+  - motion server 负责切换 `arm_controller` / `servo_position_controller`。
+  - motion server 负责启动 MoveIt Servo，并转发到 `/servo_node/delta_joint_cmds` 和 `/servo_node/delta_twist_cmds`。
+  - MoveIt Servo 当前输出 `std_msgs/Float64MultiArray` 到 `/servo_position_controller/commands`。
+  - `servo_position_controller` 是 `position_controllers/JointGroupPositionController`。
+  - `publish_period` 当前配置为 `0.005s`，目标是 200Hz position-only 流式输出。
+  - 该链路已在虚拟/仿真环境验证正常，尚未做真机测试。
+  - 当前仍未输出 velocity / effort，后续如果要给电机前馈速度和动力学 effort，需要迁移到 `MultiInterfaceForwardCommandController` 或自定义 controller。
 
 - `ServoJ/ServoL`
   - 尚未实现。
@@ -97,7 +100,7 @@ MOVE:
 
 SERVO:
   MoveIt Servo / easyarm_motion_server
-    -> servo_forward_controller 或 EasyArmServoController
+    -> servo_position_controller / servo_forward_controller / EasyArmServoController
     -> easyarm_hardware
 ```
 
@@ -110,10 +113,11 @@ SERVO:
 
 `SERVO` 链路转向 forward controller 或自定义 streaming controller：
 
-- 优先评估 `forward_command_controller/MultiInterfaceForwardCommandController`。
-- MoveIt Servo 输出改为 `std_msgs/Float64MultiArray`。
-- 输出 topic 指向 forward controller 的 `commands` topic。
+- 当前第一阶段已经改为 `position_controllers/JointGroupPositionController`。
+- MoveIt Servo 输出已经改为 `std_msgs/Float64MultiArray`。
+- 输出 topic 当前指向 `/servo_position_controller/commands`。
 - 目标是支持 200Hz 级别的高刷新率实时控制链路。
+- 后续继续评估 `forward_command_controller/MultiInterfaceForwardCommandController`，用于同时输出 `position + velocity`。
 
 控制器候选优先级：
 
@@ -124,7 +128,7 @@ SERVO:
 
 2. `position_controllers/JointGroupPositionController`
    - 只转发 position command。
-   - 配置简单，适合作为第一阶段 mock 验证。
+   - 当前第一阶段已经采用该方案。
    - 对 `SpeedJ/SpeedL` 来说，需要依赖 MoveIt Servo 内部积分后的 joint position 输出。
 
 3. `velocity_controllers/JointGroupVelocityController`
@@ -153,7 +157,7 @@ SERVO:
   - stop / hold / timeout 处理。
   - 避免 JTC 旧目标残留导致回跳。
 
-短期可以保持当前 `SpeedJ/SpeedL` 测试入口，但中期应迁移为：
+当前 `SpeedJ/SpeedL` 已经迁移为：
 
 ```text
 easyarm_app
@@ -190,6 +194,21 @@ controller
 - state interfaces 发布。
 - 电机 enable / disable / mode switch。
 - 最后一层安全限幅和故障保护。
+
+需要注意的是，重力补偿从 hardware 迁出不能一步完成。只要 `MoveJ/MoveL` 仍然使用 JTC，JTC 本身不会替 EasyArm 计算 `gravity(q)`，因此 hardware 内部 gravity compensation 仍然承担着 `MOVE` 链路的重力前馈职责。
+
+当前 `SpeedJ/SpeedL` 第一阶段使用 `JointGroupPositionController`，也只输出 position，不输出 effort。因此这一阶段仍可以让 hardware 内部 gravity compensation 继续工作。真正需要关闭或旁路 hardware 内部 gravity compensation 的时刻，是后续自定义 controller 或 multi-interface controller 已经开始输出 `effort` / 动力学前馈时。
+
+不建议为了这个过渡在 hardware 内新增 `SERVO` mode。`SERVO` 是上层 robot control mode，不是底层 hardware mode。更合理的底层抽象是：
+
+```text
+effort / feedforward source:
+  internal_gravity
+  controller_effort
+  none
+```
+
+因此过渡期 hardware 可能会短暂变重：它需要兼容旧的 `MoveJ/MoveL/DRAG` 链路，也要允许新的 SERVO controller 逐步接管实时控制。这个复杂度应被明确标记为临时兼容层，最终目标仍然是让 hardware 变轻。
 
 控制算法应逐步迁到 controller 层：
 
@@ -434,29 +453,31 @@ q_cmd += qd_cmd * dt
 - 不修改真实硬件默认行为。
 - 不修改 motor ID、direction、offset、joint limit、CAN 参数、control gain 或 `use_mock_hardware` 默认值。
 
-### Stage 2: Mock 验证 MoveIt Servo + Forward Controller
+### Stage 2: MoveIt Servo + JGPC Position-only 验证
 
-- 在 MoveIt config 中新增 servo forward controller 配置。
-- 不替换默认 `arm_controller`。
-- 在 bringup 中增加可选参数，例如：
-
-```text
-servo_output:=jtc|forward_position|forward_multi
-```
-
-- 默认仍保持当前 JTC 行为。
-- 新增或拆分 MoveIt Servo 参数文件：
-  - JTC 版本继续输出 `trajectory_msgs/JointTrajectory` 到 `/arm_controller/joint_trajectory`。
-  - Forward 版本输出 `std_msgs/Float64MultiArray` 到 forward controller command topic。
+- 已在 MoveIt config 中新增 `servo_position_controller`。
+- `servo_position_controller` 启动时保持 inactive。
+- 默认仍保持 `arm_controller` active。
+- MoveIt Servo 输出 `std_msgs/Float64MultiArray` 到 `/servo_position_controller/commands`。
+- `publish_period` 配置为 `0.005s`。
+- 当前已在虚拟/仿真环境验证 `SpeedJ/SpeedL` 正常，尚未做真机测试。
 
 ### Stage 3: easyarm_motion_server 封装 SpeedJ/SpeedL
 
-- `easyarm_motion_server` 增加 SERVO 模式管理。
-- 进入 SERVO 前停止/释放 JTC。
-- 激活 servo forward controller。
+- 已完成第一版。
+- `easyarm_motion_server` 增加 `MoveItServoExecutor`。
+- 进入 SERVO 前停止 MoveIt 执行，并切换 `arm_controller` / `servo_position_controller`。
 - 启动 MoveIt Servo。
-- `/easyarm/stop` 同时停止 MoveIt Servo 输出并执行 hold/zero command。
-- `easyarm_app` 改为只调用 `easyarm_motion_server` 的 SpeedJ/SpeedL 接口。
+- `/easyarm/stop` 同时停止 MoveIt Servo 输出并发送 zero command。
+- speed command timeout 后发送 zero command 并切回 `arm_controller`。
+- `easyarm_app` 改为发布 `/easyarm/speedj_cmd` 和 `/easyarm/speedl_cmd`。
+
+后续需要继续打磨：
+
+- 真机低速验证。
+- 失败恢复和状态上报。
+- controller 切换耗时和边界条件。
+- `SERVO` 与 hardware `POSITION/IDLE/DRAG` 历史模式的命名解耦。
 
 ### Stage 4: 引入 EasyArmServoController
 
@@ -478,11 +499,11 @@ Mock 阶段：
 
 ```bash
 colcon build --packages-select easyarm_a1_moveit_config easyarm_a1_bringup easyarm_motion_server easyarm_app
-ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=true servo_output:=forward_position
+ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=true
 ros2 control list_controllers
-ros2 topic info /servo_node/delta_joint_cmds -v
-ros2 topic info /servo_node/delta_twist_cmds -v
-ros2 topic hz <forward_controller_command_topic>
+ros2 topic info /easyarm/speedj_cmd -v
+ros2 topic info /easyarm/speedl_cmd -v
+ros2 topic hz /servo_position_controller/commands
 ```
 
 功能回归：
