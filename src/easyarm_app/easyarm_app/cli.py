@@ -2,17 +2,23 @@ import argparse
 import atexit
 import os
 import readline
+import select
 import shlex
 import subprocess
 import sys
+import termios
+import time
+import tty
 
 import rclpy
+from control_msgs.msg import JointJog
 from easyarm_interfaces.action import MoveJ, MoveL
 from easyarm_interfaces.srv import GetJoints, GetPose, GetState, SetMode, Stop
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
+from std_srvs.srv import Trigger
 
 
 class EasyArmCli(Node):
@@ -25,6 +31,9 @@ class EasyArmCli(Node):
         self.get_state_client = self.create_client(GetState, "/easyarm/get_state")
         self.get_joints_client = self.create_client(GetJoints, "/easyarm/get_joints")
         self.get_pose_client = self.create_client(GetPose, "/easyarm/get_pose")
+        self.start_servo_client = self.create_client(Trigger, "/servo_node/start_servo")
+        self.speedj_pub = self.create_publisher(JointJog, "/servo_node/delta_joint_cmds", 10)
+        self.speedl_pub = self.create_publisher(TwistStamped, "/servo_node/delta_twist_cmds", 10)
 
     def movej(self, args) -> int:
         if not self.movej_client.wait_for_server(timeout_sec=args.timeout):
@@ -165,6 +174,57 @@ class EasyArmCli(Node):
         )
         return 0 if response.success else 1
 
+    def speedj(self, args) -> int:
+        if not self._require_position_mode(args.timeout):
+            return 1
+        if not self._start_moveit_servo(args.timeout):
+            return 1
+        velocities = [float(value) for value in args.velocities]
+        if not self._validate_stream_args(args.rate, args.duration):
+            return 1
+        if not self._wait_for_subscribers(self.speedj_pub, "/servo_node/delta_joint_cmds", args.timeout):
+            return 1
+
+        interval = 1.0 / float(args.rate)
+        count = self._publish_for_duration(
+            interval,
+            float(args.duration),
+            lambda: self._make_joint_jog(velocities),
+            self.speedj_pub.publish,
+        )
+        self._publish_halt_joint_jog(args.halt_count, interval)
+        self._log_info(f"published speedj commands: {count}")
+        return 0
+
+    def speedl(self, args) -> int:
+        if not self._require_position_mode(args.timeout):
+            return 1
+        if not self._start_moveit_servo(args.timeout):
+            return 1
+        if not self._validate_stream_args(args.rate, args.duration):
+            return 1
+        twist = [
+            float(args.vx),
+            float(args.vy),
+            float(args.vz),
+            float(args.wx),
+            float(args.wy),
+            float(args.wz),
+        ]
+        if not self._wait_for_subscribers(self.speedl_pub, "/servo_node/delta_twist_cmds", args.timeout):
+            return 1
+
+        interval = 1.0 / float(args.rate)
+        count = self._publish_for_duration(
+            interval,
+            float(args.duration),
+            lambda: self._make_twist(twist, args.frame_id),
+            self.speedl_pub.publish,
+        )
+        self._publish_halt_twist(args.halt_count, interval, args.frame_id)
+        self._log_info(f"published speedl commands: {count}")
+        return 0
+
     def _send_action_goal(self, client, goal, timeout: float) -> int:
         goal_future = client.send_goal_async(goal)
         try:
@@ -218,6 +278,212 @@ class EasyArmCli(Node):
     def _log_info(self, message: str) -> None:
         self.get_logger().info(message)
 
+    def _require_position_mode(self, timeout: float) -> bool:
+        if not self.get_state_client.wait_for_service(timeout_sec=timeout):
+            self.get_logger().error("/easyarm/get_state service not available")
+            return False
+        future = self.get_state_client.call_async(GetState.Request())
+        if not _spin_until_complete(self, future, timeout):
+            self.get_logger().error("Timeout calling /easyarm/get_state")
+            return False
+        response = future.result()
+        if response is None:
+            self.get_logger().error("No response from /easyarm/get_state")
+            return False
+        if response.mode != "POSITION":
+            self.get_logger().error(
+                f"Speed commands require POSITION mode; current mode is {response.mode}")
+            return False
+        return True
+
+    def _validate_stream_args(self, rate: float, duration: float) -> bool:
+        if rate <= 0.0:
+            self.get_logger().error("--rate must be greater than 0")
+            return False
+        if duration < 0.0:
+            self.get_logger().error("--duration must be greater than or equal to 0")
+            return False
+        return True
+
+    def _start_moveit_servo(self, timeout: float) -> bool:
+        if not self.start_servo_client.wait_for_service(timeout_sec=timeout):
+            self.get_logger().error("/servo_node/start_servo service not available")
+            return False
+        future = self.start_servo_client.call_async(Trigger.Request())
+        if not _spin_until_complete(self, future, timeout):
+            self.get_logger().error("Timeout calling /servo_node/start_servo")
+            return False
+        response = future.result()
+        if response is None:
+            self.get_logger().error("No response from /servo_node/start_servo")
+            return False
+        if not response.success:
+            self.get_logger().error(f"/servo_node/start_servo failed: {response.message}")
+            return False
+        if response.message:
+            self._log_info(f"MoveIt Servo start: {response.message}")
+        return True
+
+    def _wait_for_subscribers(self, publisher, topic_name: str, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while rclpy.ok() and time.monotonic() < deadline:
+            if publisher.get_subscription_count() > 0:
+                return True
+            rclpy.spin_once(self, timeout_sec=0.05)
+        self.get_logger().error(f"{topic_name} has no subscribers")
+        return False
+
+    def _publish_for_duration(self, interval: float, duration: float, make_message, publish) -> int:
+        end_time = time.monotonic() + duration
+        next_time = time.monotonic()
+        count = 0
+        while rclpy.ok() and time.monotonic() < end_time:
+            publish(make_message())
+            count += 1
+            next_time += interval
+            sleep_time = next_time - time.monotonic()
+            if sleep_time > 0.0:
+                time.sleep(sleep_time)
+            else:
+                next_time = time.monotonic()
+        return count
+
+    def _make_joint_jog(self, velocities) -> JointJog:
+        message = JointJog()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = "base_link"
+        message.joint_names = [f"Joint{index}" for index in range(1, 7)]
+        message.velocities = list(velocities)
+        return message
+
+    def _make_twist(self, values, frame_id: str) -> TwistStamped:
+        message = TwistStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = frame_id
+        message.twist.linear.x = values[0]
+        message.twist.linear.y = values[1]
+        message.twist.linear.z = values[2]
+        message.twist.angular.x = values[3]
+        message.twist.angular.y = values[4]
+        message.twist.angular.z = values[5]
+        return message
+
+    def _publish_halt_joint_jog(self, count: int, interval: float) -> None:
+        zeros = [0.0] * 6
+        for _ in range(max(0, int(count))):
+            self.speedj_pub.publish(self._make_joint_jog(zeros))
+            time.sleep(interval)
+
+    def _publish_halt_twist(self, count: int, interval: float, frame_id: str) -> None:
+        zeros = [0.0] * 6
+        for _ in range(max(0, int(count))):
+            self.speedl_pub.publish(self._make_twist(zeros, frame_id))
+            time.sleep(interval)
+
+    def run_speedj_teleop(self) -> int:
+        if not self._require_position_mode(5.0):
+            return 1
+        if not self._start_moveit_servo(5.0):
+            return 1
+        if not self._wait_for_subscribers(self.speedj_pub, "/servo_node/delta_joint_cmds", 5.0):
+            return 1
+
+        controller = SpeedJTeleopController(self)
+        return controller.run()
+
+
+class RawTerminal:
+    def __enter__(self):
+        self.fd = sys.stdin.fileno()
+        self.old_settings = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+
+    def read_key(self):
+        if select.select([sys.stdin], [], [], 0.0)[0]:
+            return sys.stdin.read(1)
+        return None
+
+
+class SpeedJTeleopController:
+    POSITIVE_KEYS = "123456"
+    NEGATIVE_KEYS = "qwerty"
+
+    def __init__(self, node: EasyArmCli):
+        self.node = node
+        self.rate_hz = 50.0
+        self.dt = 1.0 / self.rate_hz
+        self.max_speed = 10.0
+        self.accel = 10.0
+        self.decel = 20.0
+        self.key_timeout = 0.12
+        self.velocities = [0.0] * 6
+        self.active_until = [0.0] * 6
+        self.target_signs = [0] * 6
+
+    def run(self) -> int:
+        self.node.get_logger().info(
+            "SpeedJ teleop mode: 1-6 positive, qwerty negative, Esc exits.")
+        self.node.get_logger().info(
+            f"Hold a key to ramp joint speed up to {self.max_speed:.1f} rad/s; release ramps quickly to zero.")
+
+        try:
+            with RawTerminal() as terminal:
+                while rclpy.ok():
+                    start = time.monotonic()
+                    if self._handle_key(terminal.read_key(), start):
+                        break
+                    self._update_velocities(start)
+                    self.node.speedj_pub.publish(self.node._make_joint_jog(self.velocities))
+                    sleep_time = self.dt - (time.monotonic() - start)
+                    if sleep_time > 0.0:
+                        time.sleep(sleep_time)
+        except KeyboardInterrupt:
+            print()
+        finally:
+            self._halt()
+            print()
+        return 0
+
+    def _handle_key(self, key, now: float) -> bool:
+        if key is None:
+            return False
+        if key == "\x1b":
+            return True
+        if key in self.POSITIVE_KEYS:
+            index = self.POSITIVE_KEYS.index(key)
+            self.target_signs[index] = 1
+            self.active_until[index] = now + self.key_timeout
+        elif key in self.NEGATIVE_KEYS:
+            index = self.NEGATIVE_KEYS.index(key)
+            self.target_signs[index] = -1
+            self.active_until[index] = now + self.key_timeout
+        return False
+
+    def _update_velocities(self, now: float) -> None:
+        for index in range(6):
+            if now <= self.active_until[index]:
+                target = self.target_signs[index] * self.max_speed
+                step = self.accel * self.dt
+            else:
+                target = 0.0
+                self.target_signs[index] = 0
+                step = self.decel * self.dt
+            self.velocities[index] = _approach(self.velocities[index], target, step)
+
+    def _halt(self) -> None:
+        interval = self.dt
+        while any(abs(value) > 1e-3 for value in self.velocities):
+            self.velocities = [_approach(value, 0.0, self.decel * interval) for value in self.velocities]
+            self.node.speedj_pub.publish(self.node._make_joint_jog(self.velocities))
+            time.sleep(interval)
+        for _ in range(4):
+            self.node.speedj_pub.publish(self.node._make_joint_jog([0.0] * 6))
+            time.sleep(interval)
+
 
 def _spin_until_complete(node: Node, future, timeout):
     rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
@@ -230,13 +496,24 @@ def _value_or_nan(values, index: int) -> float:
     return float(values[index])
 
 
+def _approach(value: float, target: float, step: float) -> float:
+    if value < target:
+        return min(value + step, target)
+    if value > target:
+        return max(value - step, target)
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="EasyArm app CLI",
         epilog=(
             "examples:\n"
             "  movej 0.0025 0.25 2 0.1 -1.57 0.0\n"
+            "  speedj_teleop    # in easyarm_shell: keyboard JointJog mode\n"
             "  movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0\n"
+            "  speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50\n"
+            "  speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50\n"
             "  set-mode DRAG\n"
             "  set-mode POSITION"
         ),
@@ -248,7 +525,10 @@ def build_parser() -> argparse.ArgumentParser:
     movej = subparsers.add_parser(
         "movej",
         help="Call /easyarm/movej",
-        epilog="example:\n  movej 0.0025 0.25 2 0.1 -1.57 0.0",
+        epilog=(
+            "example:\n"
+            "  movej 0.0025 0.25 2 0.1 -1.57 0.0"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     movej.add_argument("joints", nargs=6, type=float, metavar="J")
@@ -292,6 +572,39 @@ def build_parser() -> argparse.ArgumentParser:
     get_pose.add_argument("--target-frame", default="base_link")
     get_pose.add_argument("--source-frame", default="Link6")
 
+    speedj = subparsers.add_parser(
+        "speedj",
+        help="Publish MoveIt Servo JointJog commands",
+        epilog="example:\n  speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    speedj.add_argument("velocities", nargs=6, type=float, metavar="V")
+    speedj.add_argument("--duration", type=float, default=1.0)
+    speedj.add_argument("--rate", type=float, default=50.0)
+    speedj.add_argument("--halt-count", type=int, default=4)
+
+    speedl = subparsers.add_parser(
+        "speedl",
+        help="Publish MoveIt Servo TwistStamped commands",
+        epilog="example:\n  speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    speedl.add_argument("vx", type=float)
+    speedl.add_argument("vy", type=float)
+    speedl.add_argument("vz", type=float)
+    speedl.add_argument("wx", type=float)
+    speedl.add_argument("wy", type=float)
+    speedl.add_argument("wz", type=float)
+    speedl.add_argument("--frame-id", default="base_link")
+    speedl.add_argument("--duration", type=float, default=1.0)
+    speedl.add_argument("--rate", type=float, default=50.0)
+    speedl.add_argument("--halt-count", type=int, default=4)
+
+    subparsers.add_parser(
+        "speedj_teleop",
+        help="Run keyboard SpeedJ teleoperation in easyarm_shell",
+    )
+
     safe_shutdown = subparsers.add_parser("safe_shutdown", help="Run safe shutdown and exit shell")
     safe_shutdown.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to safe_shutdown.sh")
 
@@ -316,6 +629,13 @@ def run_command(node: EasyArmCli, args) -> int:
         return node.get_joints(args)
     if args.command == "get-pose":
         return node.get_pose(args)
+    if args.command == "speedj":
+        return node.speedj(args)
+    if args.command == "speedl":
+        return node.speedl(args)
+    if args.command == "speedj_teleop":
+        node.get_logger().error("speedj_teleop is only supported by easyarm_shell")
+        return 1
     raise RuntimeError(f"unknown command {args.command}")
 
 
@@ -380,6 +700,9 @@ def shell_main() -> None:
                 break
             if line in ("help", "?"):
                 parser.print_help()
+                continue
+            if line == "speedj_teleop":
+                node.run_speedj_teleop()
                 continue
             if line == "safe_shutdown" or line.startswith("safe_shutdown "):
                 try:

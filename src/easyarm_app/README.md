@@ -1,6 +1,8 @@
 # easyarm_app
 
-`easyarm_app` 是新的上层 app/CLI 层。它只调用 `easyarm_motion_server` 暴露的接口，不直接调用 MoveIt、不直接发底层 trajectory，也不直接访问硬件参数服务。
+`easyarm_app` 是新的上层 app/CLI 层。规划式运动调用 `easyarm_motion_server`
+暴露的接口；`speedj/speedl` 只发布 MoveIt Servo 的原生速度输入 topic，不直接发底层
+trajectory，也不直接访问硬件参数服务。
 
 旧的 `easyarm_move_task` 暂时保留，后续功能稳定后再逐步迁移。
 
@@ -28,6 +30,7 @@ easyarm_shell 执行文件同目录下的 .easyarm_shell_history
 easyarm> get-joints
 easyarm> get-pose
 easyarm> movej 0 0 2.35619 0.7854 -1.5708 0 --plan-only
+easyarm> speedj_teleop
 easyarm> exit
 ```
 
@@ -41,6 +44,9 @@ stop
 get-state
 get-joints
 get-pose
+speedj
+speedl
+speedj_teleop
 ```
 
 ## 测试前启动
@@ -50,13 +56,13 @@ get-pose
 Mock：
 
 ```bash
-ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true
+ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=true
 ```
 
 真实硬件：
 
 ```bash
-ros2 launch easyarm_a1_bringup bringup.launch.py
+ros2 launch easyarm_a1_bringup bringup.launch.py moveit_servo:=true
 ```
 
 真实硬件启动前需要先配置 `can0`：
@@ -129,3 +135,35 @@ ros2 run easyarm_app easyarm set-mode DRAG
 ```bash
 ros2 run easyarm_app easyarm stop
 ```
+
+SpeedJ 关节速度遥操：
+
+```bash
+ros2 run easyarm_app easyarm set-mode POSITION
+ros2 run easyarm_app easyarm speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50
+```
+
+SpeedL 末端速度遥操：
+
+```bash
+ros2 run easyarm_app easyarm set-mode POSITION
+ros2 run easyarm_app easyarm speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50
+```
+
+## 键盘 SpeedJ 模式
+
+`easyarm_shell` 中输入 `speedj_teleop` 会进入键盘关节速度控制模式：
+
+```text
+easyarm> speedj_teleop
+```
+
+按键映射：
+
+```text
+1 2 3 4 5 6  -> Joint1..Joint6 正方向速度
+q w e r t y  -> Joint1..Joint6 负方向速度
+Esc          -> 退出并发送零速度
+```
+
+按住按键时速度会缓慢增加；松开后速度会快速回零，但不会瞬间归零。

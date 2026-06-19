@@ -1,4 +1,5 @@
 import os
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -11,10 +12,21 @@ from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
+def load_yaml(package_name, file_path):
+    package_path = get_package_share_directory(package_name)
+    absolute_file_path = os.path.join(package_path, file_path)
+    try:
+        with open(absolute_file_path, "r", encoding="utf-8") as file:
+            return yaml.safe_load(file)
+    except OSError:
+        return None
+
+
 def generate_launch_description():
     use_mock_hardware = LaunchConfiguration("use_mock_hardware", default="false")
     debug_enable = LaunchConfiguration("debug_enable", default="false")
     rviz = LaunchConfiguration("rviz", default="false")
+    moveit_servo = LaunchConfiguration("moveit_servo", default="false")
     publish_frequency = LaunchConfiguration("publish_frequency", default="15.0")
     easyarm_urdf_path = LaunchConfiguration("easyarm_urdf_path")
 
@@ -140,6 +152,27 @@ def generate_launch_description():
         ],
     )
 
+    servo_params = {
+        "moveit_servo": load_yaml(
+            "easyarm_a1_moveit_config",
+            "config/moveit_servo.yaml",
+        )
+    }
+
+    servo_node = Node(
+        package="moveit_servo",
+        executable="servo_node_main",
+        name="servo_node",
+        output="screen",
+        parameters=[
+            servo_params,
+            moveit_config.robot_description,
+            moveit_config.robot_description_semantic,
+            moveit_config.robot_description_kinematics,
+        ],
+        condition=IfCondition(moveit_servo),
+    )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -178,6 +211,11 @@ def generate_launch_description():
                 description="Start RViz with the MoveIt configuration.",
             ),
             DeclareLaunchArgument(
+                "moveit_servo",
+                default_value="false",
+                description="Start MoveIt Servo for SpeedJ/SpeedL teleoperation.",
+            ),
+            DeclareLaunchArgument(
                 "easyarm_urdf_path",
                 default_value=default_urdf_path,
                 description="URDF file used by easyarm_a1.urdf.xacro and easyarm_hardware.",
@@ -201,7 +239,7 @@ def generate_launch_description():
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=arm_controller_spawner,
-                    on_exit=[motion_server],
+                    on_exit=[motion_server, servo_node],
                 )
             ),
             rviz_node,

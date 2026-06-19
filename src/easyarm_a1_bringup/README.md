@@ -50,6 +50,22 @@ RViz 默认不启动。调试时可以打开：
 ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true rviz:=true
 ```
 
+## MoveIt Servo
+
+MoveIt Servo 默认不启动。需要测试 `SpeedJ/SpeedL` 遥操时打开：
+
+```bash
+ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=true
+```
+
+真实硬件上测试前先确认已经切到 `POSITION`，并使用小速度：
+
+```bash
+ros2 run easyarm_app easyarm set-mode POSITION
+ros2 run easyarm_app easyarm speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50
+ros2 run easyarm_app easyarm speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50
+```
+
 ## Checks
 
 检查节点：
@@ -87,6 +103,14 @@ arm_controller active
 ros2 run easyarm_app easyarm get-state
 ros2 run easyarm_app easyarm get-joints
 ros2 run easyarm_app easyarm get-pose
+```
+
+检查 MoveIt Servo：
+
+```bash
+ros2 topic info /servo_node/delta_joint_cmds -v
+ros2 topic info /servo_node/delta_twist_cmds -v
+ros2 topic echo /servo_node/status
 ```
 
 ## Safe Shutdown
