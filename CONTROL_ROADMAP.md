@@ -235,33 +235,33 @@ easyarm_control
 后续讨论中建议区分三层：
 
 ```text
-Robot Control Mode
-  IDLE
-  DRAG
-  MOVE
-  SERVO
+Robot Control Mode                  # 机器人控制模式：决定当前谁在控制机械臂、输入频率是什么
+  IDLE                              # 空闲/阻尼/停止状态
+  DRAG                              # 拖拽模式：人手施加外力，系统做重力补偿和阻尼
+  MOVE                              # 规划运动模式：接收单点或低频目标，执行完整轨迹
+  SERVO                             # 实时伺服模式：接收高频连续输入，实时跟随
 
-Control Strategy
-  position control
-  velocity control
-  gravity compensation
-  impedance control
-  admittance control
-  hybrid force-position control
-  collision detection / protection
+Control Strategy                    # 控制策略：某个模式内部使用的控制算法
+  position control                  # 位置控制
+  velocity control                  # 速度控制
+  gravity compensation              # 重力补偿
+  impedance control                 # 阻抗控制：位置误差到力/力矩
+  admittance control                # 导纳控制：外力到位置/速度
+  hybrid force-position control     # 混合力位控制：部分方向控位置，部分方向控力
+  collision detection / protection  # 碰撞检测/保护
 
-Task Skill / Interface
-  MoveJ
-  MoveL
-  SpeedJ
-  SpeedL
-  ServoJ
-  ServoL
-  drag teaching
-  constant-force press
-  surface following
-  grinding / polishing
-  insertion
+Task Skill / Interface              # 任务技能或对外接口：用户真正调用的动作能力
+  MoveJ                             # 关节空间规划运动
+  MoveL                             # 笛卡尔空间直线规划运动
+  SpeedJ                            # 关节空间速度伺服
+  SpeedL                            # 笛卡尔空间速度伺服
+  ServoJ                            # 关节空间位置伺服，尚未实现
+  ServoL                            # 笛卡尔空间位置伺服，尚未实现
+  drag teaching                     # 拖拽示教
+  constant-force press              # 恒力按压
+  surface following                 # 沿面跟随
+  grinding / polishing              # 打磨/抛光
+  insertion                         # 插孔/装配
 ```
 
 `DRAG`、`MOVE`、`SERVO` 是控制模式；阻抗、导纳、重力补偿、混合力位控制是控制策略；`MoveJ`、
