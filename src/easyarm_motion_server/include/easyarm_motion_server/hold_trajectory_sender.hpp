@@ -12,10 +12,10 @@
 namespace easyarm_motion_server
 {
 
-class TrajectorySender
+class HoldTrajectorySender
 {
 public:
-  TrajectorySender(
+  HoldTrajectorySender(
     rclcpp::Node & node,
     const MotionContext & context,
     JointStateCache & joint_state_cache,

@@ -17,11 +17,11 @@ scale:
 override_velocity_scaling_factor: 0.0
 
 ## Outgoing commands
-publish_period: 0.02
+publish_period: 0.005
 low_latency_mode: false
-command_out_type: trajectory_msgs/JointTrajectory
+command_out_type: std_msgs/Float64MultiArray
 publish_joint_positions: true
-publish_joint_velocities: true
+publish_joint_velocities: false
 publish_joint_accelerations: false
 smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
 
@@ -49,7 +49,7 @@ cartesian_command_in_topic: ~/delta_twist_cmds
 joint_command_in_topic: ~/delta_joint_cmds
 joint_topic: /joint_states
 status_topic: ~/status
-command_out_topic: /arm_controller/joint_trajectory
+command_out_topic: /servo_position_controller/commands
 
 ## Collision checking
 check_collisions: true

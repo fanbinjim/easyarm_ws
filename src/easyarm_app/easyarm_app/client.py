@@ -7,7 +7,6 @@ from easyarm_interfaces.srv import GetJoints, GetPose, GetState, SetMode, Stop
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from std_srvs.srv import Trigger
 
 from .teleop import SpeedJTeleopController, SpeedLTeleopController
 from .utils import _spin_until_complete, _value_or_nan
@@ -23,9 +22,8 @@ class EasyArmCli(Node):
         self.get_state_client = self.create_client(GetState, "/easyarm/get_state")
         self.get_joints_client = self.create_client(GetJoints, "/easyarm/get_joints")
         self.get_pose_client = self.create_client(GetPose, "/easyarm/get_pose")
-        self.start_servo_client = self.create_client(Trigger, "/servo_node/start_servo")
-        self.speedj_pub = self.create_publisher(JointJog, "/servo_node/delta_joint_cmds", 10)
-        self.speedl_pub = self.create_publisher(TwistStamped, "/servo_node/delta_twist_cmds", 10)
+        self.speedj_pub = self.create_publisher(JointJog, "/easyarm/speedj_cmd", 10)
+        self.speedl_pub = self.create_publisher(TwistStamped, "/easyarm/speedl_cmd", 10)
 
     def movej(self, args) -> int:
         if not self.movej_client.wait_for_server(timeout_sec=args.timeout):
@@ -169,12 +167,10 @@ class EasyArmCli(Node):
     def speedj(self, args) -> int:
         if not self._require_position_mode(args.timeout):
             return 1
-        if not self._start_moveit_servo(args.timeout):
-            return 1
         velocities = [float(value) for value in args.velocities]
         if not self._validate_stream_args(args.rate, args.duration):
             return 1
-        if not self._wait_for_subscribers(self.speedj_pub, "/servo_node/delta_joint_cmds", args.timeout):
+        if not self._wait_for_subscribers(self.speedj_pub, "/easyarm/speedj_cmd", args.timeout):
             return 1
 
         interval = 1.0 / float(args.rate)
@@ -191,8 +187,6 @@ class EasyArmCli(Node):
     def speedl(self, args) -> int:
         if not self._require_position_mode(args.timeout):
             return 1
-        if not self._start_moveit_servo(args.timeout):
-            return 1
         if not self._validate_stream_args(args.rate, args.duration):
             return 1
         twist = [
@@ -203,7 +197,7 @@ class EasyArmCli(Node):
             float(args.wy),
             float(args.wz),
         ]
-        if not self._wait_for_subscribers(self.speedl_pub, "/servo_node/delta_twist_cmds", args.timeout):
+        if not self._wait_for_subscribers(self.speedl_pub, "/easyarm/speedl_cmd", args.timeout):
             return 1
 
         interval = 1.0 / float(args.rate)
@@ -297,25 +291,6 @@ class EasyArmCli(Node):
             return False
         return True
 
-    def _start_moveit_servo(self, timeout: float) -> bool:
-        if not self.start_servo_client.wait_for_service(timeout_sec=timeout):
-            self.get_logger().error("/servo_node/start_servo service not available")
-            return False
-        future = self.start_servo_client.call_async(Trigger.Request())
-        if not _spin_until_complete(self, future, timeout):
-            self.get_logger().error("Timeout calling /servo_node/start_servo")
-            return False
-        response = future.result()
-        if response is None:
-            self.get_logger().error("No response from /servo_node/start_servo")
-            return False
-        if not response.success:
-            self.get_logger().error(f"/servo_node/start_servo failed: {response.message}")
-            return False
-        if response.message:
-            self._log_info(f"MoveIt Servo start: {response.message}")
-        return True
-
     def _wait_for_subscribers(self, publisher, topic_name: str, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
         while rclpy.ok() and time.monotonic() < deadline:
@@ -375,9 +350,7 @@ class EasyArmCli(Node):
     def run_speedj_teleop(self) -> int:
         if not self._require_position_mode(5.0):
             return 1
-        if not self._start_moveit_servo(5.0):
-            return 1
-        if not self._wait_for_subscribers(self.speedj_pub, "/servo_node/delta_joint_cmds", 5.0):
+        if not self._wait_for_subscribers(self.speedj_pub, "/easyarm/speedj_cmd", 5.0):
             return 1
 
         controller = SpeedJTeleopController(self)
@@ -386,9 +359,7 @@ class EasyArmCli(Node):
     def run_speedl_teleop(self) -> int:
         if not self._require_position_mode(5.0):
             return 1
-        if not self._start_moveit_servo(5.0):
-            return 1
-        if not self._wait_for_subscribers(self.speedl_pub, "/servo_node/delta_twist_cmds", 5.0):
+        if not self._wait_for_subscribers(self.speedl_pub, "/easyarm/speedl_cmd", 5.0):
             return 1
 
         controller = SpeedLTeleopController(self)

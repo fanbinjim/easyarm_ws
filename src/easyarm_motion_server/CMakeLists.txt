@@ -14,8 +14,10 @@ find_package(sensor_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(easyarm_interfaces REQUIRED)
 
 add_executable(easyarm_motion_server
@@ -23,7 +25,8 @@ add_executable(easyarm_motion_server
   src/motion_server_node.cpp
   src/joint_state_cache.cpp
   src/hardware_mode_client.cpp
-  src/trajectory_sender.cpp
+  src/hold_trajectory_sender.cpp
+  src/moveit_servo_executor.cpp
   src/moveit_motion_executor.cpp)
 target_include_directories(
   easyarm_motion_server
@@ -39,8 +42,10 @@ ament_target_dependencies(
   moveit_ros_planning_interface
   control_msgs
   trajectory_msgs
+  controller_manager_msgs
   rcl_interfaces
   tf2_ros
+  std_srvs
   easyarm_interfaces)
 
 install(

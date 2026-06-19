@@ -1,6 +1,6 @@
 # easyarm_motion_server
 
-`easyarm_motion_server` 是 EasyArm 的常驻运动服务层。它对外提供 MoveJ、MoveL、模式切换、停止和状态查询接口，内部复用 MoveIt/Pilz、MoveIt 配置和 `easyarm_hardware` 的 `controller_mode` 参数服务。
+`easyarm_motion_server` 是 EasyArm 的常驻运动服务层。它对外提供 MoveJ、MoveL、SpeedJ、SpeedL、模式切换、停止和状态查询接口，内部复用 MoveIt/Pilz、MoveIt Servo、MoveIt 配置和 `easyarm_hardware` 的 `controller_mode` 参数服务。
 
 旧的 `easyarm_move_task` 暂不迁移，仍作为已有 app/demo 工具保留。
 
@@ -14,6 +14,8 @@
 /easyarm/get_state  easyarm_interfaces/srv/GetState
 /easyarm/get_joints easyarm_interfaces/srv/GetJoints
 /easyarm/get_pose   easyarm_interfaces/srv/GetPose
+/easyarm/speedj_cmd control_msgs/msg/JointJog
+/easyarm/speedl_cmd geometry_msgs/msg/TwistStamped
 ```
 
 默认参数：
@@ -37,7 +39,11 @@ max_joint_state_age=0.5
 
 `/easyarm/set_mode` 切到 `POSITION` 时，会先读取当前 `/joint_states`，向 `arm_controller/follow_joint_trajectory` 发送当前点 hold trajectory，然后再设置 `controller_mode=POSITION`，避免从 `DRAG` 回到 `POSITION` 时回到旧目标位置。
 
-第一版不封装 ServoJ/ServoL，遥操后续继续接 MoveIt Servo 原生接口。
+`SpeedJ/SpeedL` 使用流式 topic 输入。收到 `/easyarm/speedj_cmd` 或 `/easyarm/speedl_cmd` 后，motion server 会在硬件模式为 `POSITION` 时自动切换到 `servo_position_controller`，启动 MoveIt Servo，并转发命令到 `/servo_node/delta_joint_cmds` 或 `/servo_node/delta_twist_cmds`。输入超时或调用 `/easyarm/stop` 后，会发送 zero command 并切回 `arm_controller`。
+
+历史说明：当前 `/easyarm/set_mode` 和 `/easyarm/get_state.mode` 封装的是 `easyarm_hardware` 的 hardware mode，只支持 `POSITION/IDLE/DRAG`。这些不是理想的上层 `MOVE/SERVO/DRAG` control mode 分层。本次保留该历史行为，避免影响已有 DRAG、safe shutdown 和真机安全逻辑。
+
+第一版不封装 ServoJ/ServoL。
 
 ## 启动流程
 
@@ -65,7 +71,7 @@ source install/setup.bash
 ```bash
 cd ~/easyarm_ws
 source install/setup.bash
-ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true
+ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=true
 ```
 
 终端 2，查询状态：
@@ -105,6 +111,18 @@ ros2 run easyarm_app easyarm movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0 \
   --velocity-scale 0.1 \
   --acceleration-scale 0.1 \
   --plan-only
+```
+
+SpeedJ 示例：
+
+```bash
+ros2 run easyarm_app easyarm speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50
+```
+
+SpeedL 示例：
+
+```bash
+ros2 run easyarm_app easyarm speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50
 ```
 
 停止：

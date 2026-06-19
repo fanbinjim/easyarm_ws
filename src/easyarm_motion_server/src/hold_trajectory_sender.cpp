@@ -1,4 +1,4 @@
-#include "easyarm_motion_server/trajectory_sender.hpp"
+#include "easyarm_motion_server/hold_trajectory_sender.hpp"
 
 #include <chrono>
 #include <future>
@@ -10,7 +10,7 @@
 namespace easyarm_motion_server
 {
 
-TrajectorySender::TrajectorySender(
+HoldTrajectorySender::HoldTrajectorySender(
   rclcpp::Node & node,
   const MotionContext & context,
   JointStateCache & joint_state_cache,
@@ -26,7 +26,7 @@ TrajectorySender::TrajectorySender(
     callback_group);
 }
 
-bool TrajectorySender::holdCurrentPosition(std::string & message)
+bool HoldTrajectorySender::holdCurrentPosition(std::string & message)
 {
   std::vector<double> positions;
   if (!joint_state_cache_.waitForCurrentJointPositions(positions, message)) {

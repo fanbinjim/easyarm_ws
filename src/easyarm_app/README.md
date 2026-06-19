@@ -1,7 +1,8 @@
 # easyarm_app
 
 `easyarm_app` 是新的上层 app/CLI 层。规划式运动调用 `easyarm_motion_server`
-暴露的接口；`speedj/speedl` 只发布 MoveIt Servo 的原生速度输入 topic，不直接发底层
+暴露的接口；`speedj/speedl` 发布 EasyArm 自己的速度输入 topic，由
+`easyarm_motion_server` 负责启动 MoveIt Servo 和切换 controller。app 不直接发底层
 trajectory，也不直接访问硬件参数服务。
 
 旧的 `easyarm_move_task` 暂时保留，后续功能稳定后再逐步迁移。
@@ -201,4 +202,5 @@ l          -> 绕 z 逆时针
 Esc        -> 退出并发送零速度
 ```
 
-速度方向基于 `base_link` 坐标系，底层发布 MoveIt Servo 的 `TwistStamped` 输入。
+速度方向基于 `base_link` 坐标系，底层发布 `/easyarm/speedl_cmd`，由
+`easyarm_motion_server` 转发给 MoveIt Servo。

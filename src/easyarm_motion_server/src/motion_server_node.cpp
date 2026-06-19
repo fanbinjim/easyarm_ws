@@ -28,8 +28,9 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
   callback_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   joint_state_cache_ = std::make_unique<JointStateCache>(*this, context_);
   hardware_mode_client_ = std::make_unique<HardwareModeClient>(*this, callback_group_);
-  trajectory_sender_ = std::make_unique<TrajectorySender>(*this, context_, *joint_state_cache_, callback_group_);
+  hold_trajectory_sender_ = std::make_unique<HoldTrajectorySender>(*this, context_, *joint_state_cache_, callback_group_);
   moveit_executor_ = std::make_unique<MoveItMotionExecutor>(*this, context_);
+  moveit_servo_executor_ = std::make_unique<MoveItServoExecutor>(*this, callback_group_);
 
   movej_server_ = rclcpp_action::create_server<MoveJ>(
     this,
@@ -97,6 +98,21 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
       std::placeholders::_1,
       std::placeholders::_2),
     rmw_qos_profile_services_default,
+    callback_group_);
+
+  speedj_sub_ = create_subscription<control_msgs::msg::JointJog>(
+    "/easyarm/speedj_cmd",
+    rclcpp::QoS(10),
+    std::bind(&MotionServerNode::handleSpeedJCommand, this, std::placeholders::_1));
+
+  speedl_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+    "/easyarm/speedl_cmd",
+    rclcpp::QoS(10),
+    std::bind(&MotionServerNode::handleSpeedLCommand, this, std::placeholders::_1));
+
+  servo_timer_ = create_wall_timer(
+    std::chrono::milliseconds(20),
+    std::bind(&MotionServerNode::handleServoTimer, this),
     callback_group_);
 
   RCLCPP_INFO(
@@ -307,7 +323,7 @@ bool MotionServerNode::setHardwareMode(const std::string & requested_mode, std::
     return false;
   }
 
-  if (mode == "POSITION" && !trajectory_sender_->holdCurrentPosition(message)) {
+  if (mode == "POSITION" && !hold_trajectory_sender_->holdCurrentPosition(message)) {
     return false;
   }
 
@@ -367,6 +383,12 @@ void MotionServerNode::handleStop(
 {
   stop_requested_.store(true);
   moveit_executor_->stop();
+  if (moveit_servo_executor_->isActive()) {
+    moveit_servo_executor_->stop();
+    if (!moveit_servo_executor_->isActive() && activeTaskSnapshot().rfind("Speed", 0) == 0) {
+      releaseTask();
+    }
+  }
   response->success = true;
   response->message = "Stop requested";
 }
@@ -425,6 +447,78 @@ void MotionServerNode::handleGetPose(
   const std::string source_frame = request->source_frame.empty() ? context_.ee_link : request->source_frame;
 
   response->success = moveit_executor_->getPose(target_frame, source_frame, response->pose, response->message);
+}
+
+void MotionServerNode::handleSpeedJCommand(control_msgs::msg::JointJog::SharedPtr command)
+{
+  std::string message;
+  if (!prepareServoCommand("SpeedJ", message)) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Reject SpeedJ: %s", message.c_str());
+    return;
+  }
+  moveit_servo_executor_->forwardSpeedJ(*command);
+}
+
+void MotionServerNode::handleSpeedLCommand(geometry_msgs::msg::TwistStamped::SharedPtr command)
+{
+  std::string message;
+  if (!prepareServoCommand("SpeedL", message)) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Reject SpeedL: %s", message.c_str());
+    return;
+  }
+  moveit_servo_executor_->forwardSpeedL(*command);
+}
+
+void MotionServerNode::handleServoTimer()
+{
+  if (!moveit_servo_executor_->isActive()) {
+    return;
+  }
+
+  moveit_servo_executor_->update();
+  if (!moveit_servo_executor_->isActive() && activeTaskSnapshot().rfind("Speed", 0) == 0) {
+    releaseTask();
+  }
+}
+
+bool MotionServerNode::prepareServoCommand(const std::string & task, std::string & message)
+{
+  if (moveit_servo_executor_->isActive()) {
+    const auto active_task = activeTaskSnapshot();
+    if (active_task != task) {
+      message = "SERVO runtime is busy with " + active_task;
+      return false;
+    }
+    return true;
+  }
+
+  if (!claimTask(task, message)) {
+    return false;
+  }
+
+  std::string mode;
+  if (!hardware_mode_client_->queryMode(mode, message)) {
+    releaseTask();
+    return false;
+  }
+  updateCurrentMode(mode);
+  if (mode != "POSITION") {
+    message = task + " requires POSITION hardware mode, current mode is " + mode;
+    releaseTask();
+    return false;
+  }
+  if (!joint_state_cache_->waitForFreshState(message)) {
+    releaseTask();
+    return false;
+  }
+
+  moveit_executor_->stop();
+  if (!moveit_servo_executor_->enterServoRuntime(task, message)) {
+    releaseTask();
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace easyarm_motion_server
