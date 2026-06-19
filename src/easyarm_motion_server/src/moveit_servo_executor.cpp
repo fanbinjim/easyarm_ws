@@ -30,6 +30,10 @@ MoveItServoExecutor::MoveItServoExecutor(
     node_.declare_parameter<double>("servo_command_timeout_sec", servo_command_timeout_sec_);
   halt_message_count_ =
     node_.declare_parameter<int>("servo_halt_message_count", halt_message_count_);
+  servo_controller_name_ =
+    node_.declare_parameter<std::string>("servo_controller_name", "easyarm_servo_controller");
+  trajectory_controller_name_ =
+    node_.declare_parameter<std::string>("trajectory_controller_name", "arm_controller");
 
   switch_controller_client_ =
     node_.create_client<controller_manager_msgs::srv::SwitchController>(
@@ -76,13 +80,13 @@ bool MoveItServoExecutor::enterServoRuntime(const std::string & task, std::strin
     return false;
   }
 
-  if (!switchControllers("servo_position_controller", "arm_controller", message)) {
+  if (!switchControllers(servo_controller_name_, trajectory_controller_name_, message)) {
     return false;
   }
 
   if (!startMoveItServo(message)) {
     std::string restore_message;
-    switchControllers("arm_controller", "servo_position_controller", restore_message);
+    switchControllers(trajectory_controller_name_, servo_controller_name_, restore_message);
     return false;
   }
 
@@ -109,7 +113,7 @@ bool MoveItServoExecutor::exitServoRuntime(std::string & message)
 
   publishZeroCommands();
 
-  if (!switchControllers("arm_controller", "servo_position_controller", message)) {
+  if (!switchControllers(trajectory_controller_name_, servo_controller_name_, message)) {
     return false;
   }
 
@@ -156,7 +160,10 @@ void MoveItServoExecutor::update()
   }
 
   std::string message;
-  RCLCPP_INFO(node_.get_logger(), "SERVO command timeout, returning to arm_controller");
+  RCLCPP_INFO(
+    node_.get_logger(),
+    "SERVO command timeout, returning to %s",
+    trajectory_controller_name_.c_str());
   if (!exitServoRuntime(message)) {
     RCLCPP_ERROR(node_.get_logger(), "Failed to exit SERVO runtime after timeout: %s", message.c_str());
   }

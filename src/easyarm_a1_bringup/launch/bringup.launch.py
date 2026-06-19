@@ -128,11 +128,11 @@ def generate_launch_description():
         output="screen",
     )
 
-    servo_position_controller_spawner = Node(
+    easyarm_servo_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
         arguments=[
-            "servo_position_controller",
+            "easyarm_servo_controller",
             "--inactive",
             "--controller-manager-timeout",
             "30",
@@ -246,7 +246,7 @@ def generate_launch_description():
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=joint_state_broadcaster_spawner,
-                    on_exit=[arm_controller_spawner, servo_position_controller_spawner],
+                    on_exit=[arm_controller_spawner, easyarm_servo_controller_spawner],
                 )
             ),
             move_group,

@@ -39,7 +39,7 @@ max_joint_state_age=0.5
 
 `/easyarm/set_mode` 切到 `POSITION` 时，会先读取当前 `/joint_states`，向 `arm_controller/follow_joint_trajectory` 发送当前点 hold trajectory，然后再设置 `controller_mode=POSITION`，避免从 `DRAG` 回到 `POSITION` 时回到旧目标位置。
 
-`SpeedJ/SpeedL` 使用流式 topic 输入。收到 `/easyarm/speedj_cmd` 或 `/easyarm/speedl_cmd` 后，motion server 会在硬件模式为 `POSITION` 时自动切换到 `servo_position_controller`，启动 MoveIt Servo，并转发命令到 `/servo_node/delta_joint_cmds` 或 `/servo_node/delta_twist_cmds`。输入超时或调用 `/easyarm/stop` 后，会发送 zero command 并切回 `arm_controller`。
+`SpeedJ/SpeedL` 使用流式 topic 输入。收到 `/easyarm/speedj_cmd` 或 `/easyarm/speedl_cmd` 后，motion server 会在硬件模式为 `POSITION` 时自动切换到 `easyarm_servo_controller`，启动 MoveIt Servo，并转发命令到 `/servo_node/delta_joint_cmds` 或 `/servo_node/delta_twist_cmds`。输入超时或调用 `/easyarm/stop` 后，会发送 zero command 并切回 `arm_controller`。
 
 历史说明：当前 `/easyarm/set_mode` 和 `/easyarm/get_state.mode` 封装的是 `easyarm_hardware` 的 hardware mode，只支持 `POSITION/IDLE/DRAG`。这些不是理想的上层 `MOVE/SERVO/DRAG` control mode 分层。本次保留该历史行为，避免影响已有 DRAG、safe shutdown 和真机安全逻辑。
 

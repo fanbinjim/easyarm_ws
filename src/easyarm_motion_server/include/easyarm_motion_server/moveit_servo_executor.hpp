@@ -48,6 +48,8 @@ private:
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_servo_client_;
   rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr speedj_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr speedl_pub_;
+  std::string servo_controller_name_;
+  std::string trajectory_controller_name_;
 
   mutable std::mutex mutex_;
   bool servo_runtime_active_{false};

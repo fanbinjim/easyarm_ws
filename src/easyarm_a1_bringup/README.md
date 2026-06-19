@@ -58,9 +58,9 @@ MoveIt Servo 默认不启动。需要测试 `SpeedJ/SpeedL` 遥操时打开：
 ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=true
 ```
 
-启动后 `arm_controller` 仍保持 active，`servo_position_controller` 只加载为 inactive。
+启动后 `arm_controller` 仍保持 active，`easyarm_servo_controller` 只加载为 inactive。
 `SpeedJ/SpeedL` 命令进入时由 `easyarm_motion_server` 自动切到
-`servo_position_controller`，输入超时或 `/easyarm/stop` 后自动切回
+`easyarm_servo_controller`，输入超时或 `/easyarm/stop` 后自动切回
 `arm_controller`。
 
 真实硬件上测试前先确认已经切到 `POSITION`，并使用小速度：
@@ -100,7 +100,7 @@ ros2 control list_controllers
 ```text
 joint_state_broadcaster active
 arm_controller active
-servo_position_controller inactive
+easyarm_servo_controller inactive
 ```
 
 检查 motion server：
@@ -116,7 +116,7 @@ ros2 run easyarm_app easyarm get-pose
 ```bash
 ros2 topic info /easyarm/speedj_cmd -v
 ros2 topic info /easyarm/speedl_cmd -v
-ros2 topic hz /servo_position_controller/commands
+ros2 topic hz /easyarm_servo_controller/joint_trajectory
 ros2 topic echo /servo_node/status
 ```
 

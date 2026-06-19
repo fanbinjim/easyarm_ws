@@ -6,8 +6,8 @@ controller_manager:
     arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
-    servo_position_controller:
-      type: position_controllers/JointGroupPositionController
+    easyarm_servo_controller:
+      type: easyarm_controller/EasyArmServoController
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -30,7 +30,7 @@ arm_controller:
     constraints:
       stopped_velocity_tolerance: 0.1
 
-servo_position_controller:
+easyarm_servo_controller:
   ros__parameters:
     joints:
       - Joint1
@@ -39,3 +39,4 @@ servo_position_controller:
       - Joint4
       - Joint5
       - Joint6
+    command_timeout_sec: 0.2

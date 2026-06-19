@@ -70,8 +70,8 @@ easyarm_app
         -> /servo_node/start_servo
         -> /servo_node/delta_joint_cmds 或 /servo_node/delta_twist_cmds
           -> MoveIt Servo
-            -> /servo_position_controller/commands
-              -> servo_position_controller (JointGroupPositionController)
+            -> /easyarm_servo_controller/joint_trajectory
+              -> easyarm_servo_controller (EasyArmServoController)
                 -> easyarm_hardware
 ```
 
@@ -79,14 +79,15 @@ easyarm_app
 
 - `easyarm_app` 不再直接调用 MoveIt Servo 原生接口。
 - controller 切换、MoveIt Servo 启动、zero command、timeout 回退由 `easyarm_motion_server` 统一处理。
-- MoveIt Servo 输出已经从 JTC 短轨迹改为 `std_msgs/Float64MultiArray`。
-- `servo_position_controller` 使用 `position_controllers/JointGroupPositionController`，用于验证 200Hz position-only 流式输出。
+- MoveIt Servo 输出已经从 JTC 短轨迹改为高频 `trajectory_msgs/JointTrajectory`。
+- `easyarm_servo_controller` 使用自定义 `easyarm_controller/EasyArmServoController`，用于验证自定义 controller 替代 JGPC 后的 200Hz 流式输出。
 - 当前已在虚拟/仿真环境验证 `SpeedJ/SpeedL` 可用，尚未做真机测试。
 
 当前仍然存在的问题：
 
-- `servo_position_controller` 只下发 position，不下发 velocity / effort。
-- 如果后续希望给电机同时提供目标位置、前馈速度和动力学 effort，需要继续评估 `MultiInterfaceForwardCommandController` 或自定义 controller。
+- `easyarm_servo_controller` 第一版只下发 position；`JointTrajectory` 输入中的 velocity / acceleration 会解析和缓存，暂不写给 hardware。
+- `easyarm_servo_controller` 同时保留 `std_msgs/Float64MultiArray` 兼容输入，但该输入只表示 position-only。
+- 如果后续希望给电机同时提供目标位置、前馈速度和动力学 effort，可以在自定义 controller 内继续使用已缓存的 velocity / acceleration，并引入 `easyarm_dynamics`。
 - 当前 `easyarm_hardware` 仍会在 `POSITION` 路径内做内部重力补偿和速度前馈。
 - `SpeedJ/SpeedL` 的上层 control mode 已经是 `SERVO`，但底层 hardware mode 仍沿用历史 `POSITION/IDLE/DRAG` 分层。
 
@@ -192,7 +193,7 @@ MoveJ/MoveL
 建议迁移原则：
 
 - `MoveJ/MoveL` 仍使用 JTC 时，hardware 内部 gravity compensation 继续保留。
-- 当前 `SpeedJ/SpeedL` 使用 `JointGroupPositionController`，只输出 position，因此也可以暂时继续依赖 hardware 内部 gravity compensation。
+- 当前 `SpeedJ/SpeedL` 使用 `EasyArmServoController` 第一版，只输出 position，因此也可以暂时继续依赖 hardware 内部 gravity compensation。
 - 只有当后续 `EasyArmServoController` 开始输出 `effort` 或完整动力学前馈时，才需要关闭或旁路 hardware 内部同类补偿，避免双重补偿。
 - 不建议为了 SERVO 在 hardware 内新增 `SERVO` mode，因为 `SERVO` 是上层 robot control mode，不是底层 motor/hardware mode。
 - 更合理的底层开关是 `effort/feedforward source`，例如 `internal_gravity`、`controller_effort`、`none`。
@@ -407,14 +408,14 @@ easyarm_move_task
 
 - `easyarm_motion_server` 已经封装 `SpeedJ/SpeedL`，后续继续打磨状态上报、失败恢复和真机安全验证。
 - `easyarm_app` 已经不再直接调用 MoveIt Servo 原生接口，后续保持 app 只调用 EasyArm 自己的接口。
-- 在 mock 和真机低速环境继续验证 MoveIt Servo 输出到 `servo_position_controller`。
+- 在 mock 和真机低速环境继续验证 MoveIt Servo 输出到 `easyarm_servo_controller`。
 - 评估 `MultiInterfaceForwardCommandController` 是否能稳定输出 `position + velocity`。
 
 ### Long Term
 
 - 新增 `easyarm_control`。
 - 实现 `EasyArmServoController`。
-- 将 SERVO 链路从 position-only JGPC 迁移到 forward/custom streaming controller。
+- 将 SERVO 链路从 position-only 自定义 controller 继续迁移到 position + velocity + effort streaming controller。
 - 逐步把 gravity compensation、feedforward、impedance/admittance 从 hardware 层迁移到 controller 层。
 - 等 SERVO controller 稳定后，再评估 `DRAG` 是否从 hardware 迁移到 `EasyArmDragController`。
 
@@ -423,7 +424,7 @@ easyarm_move_task
 后续判断新功能放在哪里，可以遵循：
 
 - `MOVE`：单点或低频目标，走 MoveIt/Pilz + JTC。
-- `SERVO`：高频连续输入，当前走 MoveIt Servo + JGPC position-only，长期走 MoveIt Servo + forward/custom controller。
+- `SERVO`：高频连续输入，当前走 MoveIt Servo + EasyArmServoController position-only，长期扩展到 position + velocity + effort。
 - `DRAG`：短期保留 hardware，长期再评估 controller 化。
 - `easyarm_app`：只做用户入口，不直接碰硬件，不直接调用 MoveIt Servo 原生接口。
 - `easyarm_motion_server`：统一对外运动 API，负责模式协调和运动能力封装。

@@ -19,10 +19,7 @@ override_velocity_scaling_factor: 0.0
 ## Outgoing commands
 publish_period: 0.005
 low_latency_mode: false
-command_out_type: std_msgs/Float64MultiArray
-publish_joint_positions: true
-publish_joint_velocities: false
-publish_joint_accelerations: false
+
 smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
 
 ## Planning scene ownership
@@ -49,7 +46,28 @@ cartesian_command_in_topic: ~/delta_twist_cmds
 joint_command_in_topic: ~/delta_joint_cmds
 joint_topic: /joint_states
 status_topic: ~/status
-command_out_topic: /servo_position_controller/commands
+
+# EasyArmServoController supports two output formats:
+# 1. trajectory_msgs/JointTrajectory -> /easyarm_servo_controller/joint_trajectory
+#    Carries positions, velocities, and accelerations. This is the default path.
+# 2. std_msgs/Float64MultiArray -> /easyarm_servo_controller/position_commands
+#    Position-only fallback. If using this path, set publish_joint_velocities and
+#    publish_joint_accelerations to false because Humble Servo requires
+#    Float64MultiArray output to be positions OR velocities, not both.
+
+command_out_type: trajectory_msgs/JointTrajectory
+command_out_topic: /easyarm_servo_controller/joint_trajectory
+publish_joint_positions: true
+publish_joint_velocities: true
+publish_joint_accelerations: true
+
+# Float64MultiArray position-only fallback:
+
+# command_out_type: std_msgs/Float64MultiArray
+# command_out_topic: /easyarm_servo_controller/position_commands
+# publish_joint_positions: true
+# publish_joint_velocities: false
+# publish_joint_accelerations: false
 
 ## Collision checking
 check_collisions: true
