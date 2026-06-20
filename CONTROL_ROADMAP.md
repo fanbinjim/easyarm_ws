@@ -32,11 +32,11 @@
   - `easyarm_servo_controller` 是 `easyarm_controller/EasyArmServoController`。
   - `publish_period` 当前配置为 `0.005s`，目标是 200Hz 流式输出。
   - MoveIt Servo 在 Humble 的 `Float64MultiArray` 输出模式要求 position 或 velocity 二选一；因此默认链路改用 `JointTrajectory`，同时输出 position / velocity / acceleration。
-  - `easyarm_servo_controller` 当前把 position 和 controller effort 写给 hardware，controller effort 目前只包含 gravity feedforward，velocity / acceleration 先解析和缓存。
+  - `easyarm_servo_controller` 当前把 `position + velocity + kp + kd + effort` 写给 hardware；velocity 第一版固定为 `0.0`，controller effort 目前只包含 gravity feedforward。
   - `easyarm_servo_controller` 同时保留 `/easyarm_servo_controller/joint_positions` 作为 `Float64MultiArray` position-only 兼容输入。
   - `EasyArmServoController` 激活时用当前 joint state 初始化 hold position；输入 timeout 后保持上一条有效 position，不清零。
   - 该链路已在虚拟/仿真环境验证正常，尚未做真机测试。
-  - 当前仍未输出 velocity；effort 先实现为 `gravity(q_target)`，后续可继续扩展为完整动力学前馈。
+  - 当前 velocity command 只作为接口占位，实际电机 velocity feed-forward 仍暂时由 hardware 差分生成；effort 先实现为 `gravity(q_target)`，后续可继续扩展为完整动力学前馈。
 
 - `ServoJ/ServoL`
   - 尚未实现。
@@ -121,7 +121,7 @@ SERVO:
 - MoveIt Servo 输出已经改为 `trajectory_msgs/JointTrajectory`。
 - 输出 topic 当前指向 `/easyarm_servo_controller/joint_trajectory`。
 - 目标是支持 200Hz 级别的高刷新率实时控制链路。
-- 后续继续评估 `forward_command_controller/MultiInterfaceForwardCommandController` 或继续扩展自定义 controller，用于同时输出 `position + velocity + effort`。
+- 后续继续评估 `forward_command_controller/MultiInterfaceForwardCommandController` 或继续扩展自定义 controller，用于同时输出完整关节运控 command。
 
 控制器候选优先级：
 
@@ -131,7 +131,7 @@ SERVO:
    - 如果后续不用自定义 controller，需要验证 Humble 版本的参数格式、命令数组 layout，以及 6 个关节双接口映射是否稳定。
 
 2. `easyarm_controller/EasyArmServoController`
-   - 已经实现 position + controller effort command，当前 effort 内容是 gravity feedforward。
+   - 已经实现 `position + velocity + kp + kd + effort` 完整 command，当前 velocity 为 0 占位，effort 内容是 gravity feedforward。
    - 当前第一阶段已经采用该方案。
    - controller 同时支持 `/easyarm_servo_controller/joint_positions` 的 `Float64MultiArray` position-only 输入和 `/easyarm_servo_controller/joint_trajectory` 的 `JointTrajectory` 输入。
    - `JointTrajectory` 输入中的 velocity / acceleration 已预留解析路径，后续可用于速度/加速度前馈和完整动力学。
@@ -203,7 +203,7 @@ controller
 
 需要注意的是，重力补偿从 hardware 迁出不能一步完成。只要 `MoveJ/MoveL` 仍然使用 JTC，JTC 本身不会替 EasyArm 计算 `gravity(q)`，因此 hardware 内部 gravity compensation 仍然承担着 `MOVE` 链路的重力前馈职责。
 
-当前 `SpeedJ/SpeedL` 使用 `EasyArmServoController` 输出 position + controller effort。SERVO 路径已经开始由 controller 提供重力前馈；`MoveJ/MoveL` 和 `DRAG` 仍继续依赖 hardware 内部 gravity compensation。
+当前 `SpeedJ/SpeedL` 使用 `EasyArmServoController` 输出完整关节运控 command。SERVO 路径已经开始由 controller 提供 `kp/kd/effort`，其中 effort 当前为 gravity feedforward；`MoveJ/MoveL` 和 `DRAG` 仍继续依赖 hardware 内部 gravity compensation。
 
 不建议为了这个过渡在 hardware 内新增 `SERVO` mode。`SERVO` 是上层 robot control mode，不是底层 hardware mode。更合理的底层抽象是：
 
@@ -246,7 +246,7 @@ easyarm_controller
    - 当前接收 `JointTrajectory`，解析 position / velocity / acceleration。
    - 当前只写入 `position` command interface。
    - 后续再内部调用 `easyarm_dynamics`。
-   - 长期目标是写入 `position + velocity + effort` command interfaces。
+   - 当前已经写入 `position + velocity + kp + kd + effort` command interfaces。
 
 2. `EasyArmDragController`
    - 只有在 `EasyArmServoController` 稳定后再评估。
@@ -472,8 +472,8 @@ q_cmd += qd_cmd * dt
 - MoveIt Servo 输出 `trajectory_msgs/JointTrajectory` 到 `/easyarm_servo_controller/joint_trajectory`。
 - `publish_period` 配置为 `0.005s`。
 - `EasyArmServoController` 兼容 `/easyarm_servo_controller/joint_positions` 的 position-only `Float64MultiArray` 输入。
-- `EasyArmServoController` 当前写入 position + controller effort，effort 内容是 gravity feedforward。
-- `JointTrajectory` 中的 velocity / acceleration 已解析并缓存，暂不写给 hardware。
+- `EasyArmServoController` 当前写入 `position + velocity + kp + kd + effort`，velocity 暂时固定为 `0.0`，effort 内容是 gravity feedforward。
+- `JointTrajectory` 中的 velocity / acceleration 已解析并缓存，后续用于速度前馈、加速度前馈和完整动力学。
 - 当前已在虚拟/仿真环境验证 `SpeedJ/SpeedL` 正常，尚未做真机测试。
 
 ### Stage 3: easyarm_motion_server 封装 SpeedJ/SpeedL
@@ -498,7 +498,7 @@ q_cmd += qd_cmd * dt
 - 在现有 `easyarm_controller/EasyArmServoController` 内继续扩展。
 - controller 内调用 `easyarm_dynamics`。
 - 从 gravity-only effort 扩展到使用 velocity / acceleration 前馈。
-- 后续输出 `position + velocity + full dynamics effort`。
+- 后续把 velocity 从占位输出扩展为真实速度前馈，并把 effort 从 gravity-only 扩展为 full dynamics effort。
 - 逐步把 gravity compensation、feedforward、impedance/admittance 从 hardware 迁移到 EasyArm 自定义 streaming controller。
 
 ### Stage 5: 评估 DRAG 和 MOVE 是否迁移

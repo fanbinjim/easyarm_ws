@@ -41,9 +41,14 @@ easyarm_servo_controller:
       - Joint6
     command_interfaces:
       - position
+      - velocity
+      - kp
+      - kd
       - effort
     state_interfaces:
       - position
     command_timeout_sec: 0.2
     enable_gravity_compensation: true
     gravity_compensation_scale: 1.0
+    kp: 80.0
+    kd: 5.0

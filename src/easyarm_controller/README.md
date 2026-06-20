@@ -8,7 +8,7 @@
 easyarm_controller/EasyArmServoController
 ```
 
-该 controller 用于 `SERVO` 链路，接收 MoveIt Servo 的 200Hz 流式输出。当前版本把目标关节位置写给 `hardware_interface` 的 `position` command interface，并根据目标位置计算 feedforward effort 写给 `effort` command interface；`velocity` 和 `acceleration` 会被解析和缓存，但暂时不写给硬件。
+该 controller 用于 `SERVO` 链路，接收 MoveIt Servo 的 200Hz 流式输出。当前版本固定输出完整关节运控 command 接口：`position + velocity + kp + kd + effort`。其中 `position` 来自上游输入，`velocity` 第一版固定写 `0.0`，`kp/kd` 来自 controller 参数，`effort` 由 `gravity(q_target)` 计算得到。
 
 ## Controller
 
@@ -35,36 +35,60 @@ easyarm_servo_controller:
       - Joint6
     command_interfaces:
       - position
+      - velocity
+      - kp
+      - kd
       - effort
     state_interfaces:
       - position
     command_timeout_sec: 0.2
     enable_gravity_compensation: true
     gravity_compensation_scale: 1.0
+    kp: 80.0
+    kd: 5.0
 ```
 
 当前 controller claim：
 
 ```text
 Joint1/position
+Joint1/velocity
+Joint1/kp
+Joint1/kd
 Joint1/effort
 Joint2/position
+Joint2/velocity
+Joint2/kp
+Joint2/kd
 Joint2/effort
 Joint3/position
+Joint3/velocity
+Joint3/kp
+Joint3/kd
 Joint3/effort
 Joint4/position
+Joint4/velocity
+Joint4/kp
+Joint4/kd
 Joint4/effort
 Joint5/position
+Joint5/velocity
+Joint5/kp
+Joint5/kd
 Joint5/effort
 Joint6/position
+Joint6/velocity
+Joint6/kp
+Joint6/kd
 Joint6/effort
 ```
 
 `command_interfaces` 和 `state_interfaces` 的配置风格参考 `JointTrajectoryController`。当前实现要求：
 
-- `command_interfaces` 必须包含 `position`。
-- `command_interfaces` 可以包含 `effort`，用于写入 controller feedforward effort。
-- `command_interfaces` 暂不支持 `velocity`；如果配置 `velocity` 会激活失败，避免误以为已经启用 controller velocity 前馈。
+- `command_interfaces` 必须固定为 `position, velocity, kp, kd, effort`。
+- `kp/kd` 是 EasyArm 自定义 command interface，对应电机运控/力位混合控制字段。
+- `velocity` 第一版固定写 `0.0`，当前电机 velocity feed-forward 仍由 `easyarm_hardware` 基于 position 差分生成。
+- `effort` 用于写入 controller feedforward effort。
 - `state_interfaces` 必须包含 `position`，可为后续扩展预留其他 state interface。
 
 当前 controller 读取：
@@ -133,8 +157,9 @@ publish_joint_accelerations: true
 说明：
 
 - `publish_period: 0.005` 对应 200Hz 输出目标。
-- 当前 controller 只使用 position。
-- velocity / acceleration 为后续速度前馈、加速度前馈和完整逆动力学控制预留。
+- 当前 controller 使用 position，解析缓存 velocity / acceleration。
+- 输出到 hardware 的 velocity command 第一版固定为 `0.0`；后续会把 position 差分和 velocity feed-forward 从 hardware 迁到 controller。
+- acceleration 为后续加速度前馈和完整逆动力学控制预留。
 - 如果改回 `std_msgs/Float64MultiArray`，输出 topic 应改为 `/easyarm_servo_controller/joint_positions`，并且必须关闭 velocity / acceleration；当前兼容路径只支持 position-only。
 
 ## Dynamics
@@ -147,7 +172,7 @@ publish_joint_accelerations: true
 HW_IF_EFFORT = gravity(q_target) * gravity_compensation_scale
 ```
 
-`easyarm_hardware` 会根据 `effort` command interface 是否被 claim 自动选择 effort 来源。`easyarm_servo_controller` active 时使用 controller effort；切回 `arm_controller` 后自动恢复 hardware internal gravity。
+`easyarm_hardware` 会根据 `kp/kd` command interface 是否被 claim 自动选择 full command 来源。`easyarm_servo_controller` active 时使用 controller 输出的 `kp/kd/effort`；切回 `arm_controller` 后自动恢复 hardware 内部兼容逻辑。
 
 `moveit_servo.yaml` 中保留了两种格式的注释，默认使用 `JointTrajectory`：
 
@@ -245,14 +270,14 @@ ros2 topic hz /easyarm_servo_controller/joint_trajectory
 ros2 topic echo /easyarm_servo_controller/joint_trajectory
 ```
 
-观察 controller 切换和 effort interface：
+观察 controller 切换和 full command interface：
 
 ```bash
 ros2 control list_controllers
 ros2 control list_hardware_interfaces
 ```
 
-`SpeedJ/SpeedL` 运行期间 `easyarm_servo_controller` 应为 active，`Joint*/effort` command interface 应被 claimed；输入 timeout 或调用 stop 后应切回 `arm_controller`，`Joint*/effort` 应释放。
+`SpeedJ/SpeedL` 运行期间 `easyarm_servo_controller` 应为 active，`Joint*/position`、`Joint*/velocity`、`Joint*/kp`、`Joint*/kd`、`Joint*/effort` command interface 应被 claimed；输入 timeout 或调用 stop 后应切回 `arm_controller`，这些接口应释放。
 
 停止：
 
@@ -262,12 +287,11 @@ ros2 run easyarm_app easyarm stop
 
 ## Current Limitations
 
-- 当前版本写 position 和 feedforward effort command interface。
-- velocity / acceleration 已解析和缓存，但暂未用于硬件输出。
+- 当前版本写 `position + velocity + kp + kd + effort` command interface。
+- velocity command 第一版固定为 `0.0`，硬件仍暂时自行基于 position 差分生成实际电机 velocity feed-forward。
+- JointTrajectory velocity / acceleration 已解析和缓存，但暂未用于动力学前馈。
 - feedforward effort 当前只包含 gravity，不计算完整 inverse dynamics。
 - `MoveJ/MoveL` 和 `DRAG` 仍依赖 `easyarm_hardware` 中现有 gravity compensation。
 - 不修改 motor ID、direction、offset、joint limit、CAN 参数、control gain 或 `use_mock_hardware` 默认值。
 
 后续如果要做完整动力学 controller，可以继续使用 `JointTrajectory` 中的 position / velocity / acceleration 生成更完整的 feedforward command。
-
-当前文件太长，可以进行拆分，ControllerInterfaceMap，RobotDescriptionLoader，DynamicsFeedforward 这三块先抽出来

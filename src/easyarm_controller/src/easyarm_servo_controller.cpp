@@ -19,13 +19,15 @@ controller_interface::CallbackReturn EasyArmServoController::on_init()
     auto_declare<std::vector<std::string>>("joints", std::vector<std::string>{});
     auto_declare<std::vector<std::string>>(
       "command_interfaces",
-      std::vector<std::string>{hardware_interface::HW_IF_POSITION, hardware_interface::HW_IF_EFFORT});
+      jointMotionControlInterfaceVector());
     auto_declare<std::vector<std::string>>(
       "state_interfaces",
       std::vector<std::string>{hardware_interface::HW_IF_POSITION});
     auto_declare<double>("command_timeout_sec", command_timeout_sec_);
     auto_declare<bool>("enable_gravity_compensation", enable_gravity_compensation_);
     auto_declare<double>("gravity_compensation_scale", gravity_compensation_scale_);
+    auto_declare<double>("kp", kp_);
+    auto_declare<double>("kd", kd_);
   } catch (const std::exception & exception) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", exception.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -57,6 +59,8 @@ controller_interface::CallbackReturn EasyArmServoController::on_configure(
   command_timeout_sec_ = get_node()->get_parameter("command_timeout_sec").as_double();
   enable_gravity_compensation_ = get_node()->get_parameter("enable_gravity_compensation").as_bool();
   gravity_compensation_scale_ = get_node()->get_parameter("gravity_compensation_scale").as_double();
+  kp_ = get_node()->get_parameter("kp").as_double();
+  kd_ = get_node()->get_parameter("kd").as_double();
 
   if (joint_names_.empty()) {
     RCLCPP_ERROR(get_node()->get_logger(), "Parameter 'joints' must not be empty");
@@ -73,13 +77,20 @@ controller_interface::CallbackReturn EasyArmServoController::on_configure(
     RCLCPP_ERROR(get_node()->get_logger(), "Parameter 'gravity_compensation_scale' must be non-negative");
     return controller_interface::CallbackReturn::ERROR;
   }
+  if (kp_ < 0.0 || kd_ < 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Parameters 'kp' and 'kd' must be non-negative");
+    return controller_interface::CallbackReturn::ERROR;
+  }
   if (!dynamics_provider_.configure(enable_gravity_compensation_, gravity_compensation_scale_)) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to configure dynamics provider");
     return controller_interface::CallbackReturn::ERROR;
   }
 
-  hold_positions_.assign(joint_names_.size(), 0.0);
-  hold_feedforward_efforts_.assign(joint_names_.size(), 0.0);
+  hold_commands_.assign(joint_names_.size(), JointMotionControlCommand{});
+  for (auto & command : hold_commands_) {
+    command.kp = kp_;
+    command.kd = kd_;
+  }
   last_velocities_.assign(joint_names_.size(), 0.0);
   last_accelerations_.assign(joint_names_.size(), 0.0);
   command_buffer_.initRT(CommandData{});
@@ -100,9 +111,11 @@ controller_interface::CallbackReturn EasyArmServoController::on_configure(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Configured EasyArmServoController with %zu joints, timeout %.3fs, topics '~/joint_positions' and '~/joint_trajectory'",
+    "Configured EasyArmServoController with %zu joints, timeout %.3fs, kp=%.3f, kd=%.3f, topics '~/joint_positions' and '~/joint_trajectory'",
     joint_names_.size(),
-    command_timeout_sec_);
+    command_timeout_sec_,
+    kp_,
+    kd_);
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
@@ -132,12 +145,17 @@ controller_interface::CallbackReturn EasyArmServoController::on_activate(
   if (!dynamics_provider_.initialize(joint_names_, get_node()->get_logger())) {
     return controller_interface::CallbackReturn::ERROR;
   }
-  if (!dynamics_provider_.computeFeedforwardEffort(
-      hold_positions_,
-      hold_feedforward_efforts_,
-      get_node()->get_logger()))
-  {
+  std::vector<double> positions;
+  positions.reserve(hold_commands_.size());
+  for (const auto & command : hold_commands_) {
+    positions.push_back(command.position);
+  }
+  std::vector<double> efforts;
+  if (!dynamics_provider_.computeFeedforwardEffort(positions, efforts, get_node()->get_logger())) {
     return controller_interface::CallbackReturn::ERROR;
+  }
+  for (size_t i = 0; i < hold_commands_.size(); ++i) {
+    hold_commands_[i].effort = efforts[i];
   }
 
   command_buffer_.writeFromNonRT(CommandData{});
@@ -163,29 +181,43 @@ controller_interface::return_type EasyArmServoController::update(
 
   if (command && command->has_command && !commandTimedOut(time, *command)) {
     // 第一版将 MoveIt Servo 输出的关节 position 作为目标 setpoint 直通保存。
-    hold_positions_ = command->positions;
-    if (!dynamics_provider_.computeFeedforwardEffort(
-        hold_positions_,
-        hold_feedforward_efforts_,
-        get_node()->get_logger()))
-    {
+    for (size_t i = 0; i < hold_commands_.size(); ++i) {
+      hold_commands_[i].position = command->positions[i];
+      // velocity 接口先占位输出 0；当前电机速度前馈仍由 hardware 基于 position 差分生成。
+      hold_commands_[i].velocity = 0.0;
+      hold_commands_[i].kp = kp_;
+      hold_commands_[i].kd = kd_;
+    }
+
+    std::vector<double> positions;
+    positions.reserve(hold_commands_.size());
+    for (const auto & hold_command : hold_commands_) {
+      positions.push_back(hold_command.position);
+    }
+    std::vector<double> efforts;
+    if (dynamics_provider_.computeFeedforwardEffort(positions, efforts, get_node()->get_logger())) {
+      for (size_t i = 0; i < hold_commands_.size(); ++i) {
+        hold_commands_[i].effort = efforts[i];
+      }
+    } else {
       RCLCPP_ERROR_THROTTLE(
         get_node()->get_logger(),
         *get_node()->get_clock(),
         1000,
         "Failed to compute feedforward effort; holding previous effort command");
     }
-    RCLCPP_INFO_THROTTLE(
-      get_node()->get_logger(),
-      *get_node()->get_clock(),
-      500,
-      "feedforward_effort Nm: [%.6f %.6f %.6f %.6f %.6f %.6f]",
-      hold_feedforward_efforts_.size() > 0 ? hold_feedforward_efforts_[0] : 0.0,
-      hold_feedforward_efforts_.size() > 1 ? hold_feedforward_efforts_[1] : 0.0,
-      hold_feedforward_efforts_.size() > 2 ? hold_feedforward_efforts_[2] : 0.0,
-      hold_feedforward_efforts_.size() > 3 ? hold_feedforward_efforts_[3] : 0.0,
-      hold_feedforward_efforts_.size() > 4 ? hold_feedforward_efforts_[4] : 0.0,
-      hold_feedforward_efforts_.size() > 5 ? hold_feedforward_efforts_[5] : 0.0);
+
+    // RCLCPP_INFO_THROTTLE(
+    //   get_node()->get_logger(),
+    //   *get_node()->get_clock(),
+    //   500,
+    //   "feedforward_effort Nm: [%.6f %.6f %.6f %.6f %.6f %.6f]",
+    //   hold_commands_.size() > 0 ? hold_commands_[0].effort : 0.0,
+    //   hold_commands_.size() > 1 ? hold_commands_[1].effort : 0.0,
+    //   hold_commands_.size() > 2 ? hold_commands_[2].effort : 0.0,
+    //   hold_commands_.size() > 3 ? hold_commands_[3].effort : 0.0,
+    //   hold_commands_.size() > 4 ? hold_commands_[4].effort : 0.0,
+    //   hold_commands_.size() > 5 ? hold_commands_[5].effort : 0.0);
 
     // velocity/acceleration 是上游轨迹输入；当前只缓存，后续用于计算完整动力学 effort。
     has_last_velocities_ = command->has_velocities;
@@ -230,7 +262,9 @@ bool EasyArmServoController::configureInterfaces()
   const auto is_supported_interface = [](const std::string & interface_name) {
     return interface_name == hardware_interface::HW_IF_POSITION ||
       interface_name == hardware_interface::HW_IF_VELOCITY ||
-      interface_name == hardware_interface::HW_IF_EFFORT;
+      interface_name == hardware_interface::HW_IF_EFFORT ||
+      interface_name == kCommandInterfaceKp ||
+      interface_name == kCommandInterfaceKd;
   };
   const auto has_duplicate = [](const std::vector<std::string> & interfaces) {
     for (size_t i = 0; i < interfaces.size(); ++i) {
@@ -260,14 +294,10 @@ bool EasyArmServoController::configureInterfaces()
     }
   }
 
-  if (!hasConfiguredCommandInterface(hardware_interface::HW_IF_POSITION)) {
-    RCLCPP_ERROR(get_node()->get_logger(), "EasyArmServoController requires position command interface");
-    return false;
-  }
-  if (hasConfiguredCommandInterface(hardware_interface::HW_IF_VELOCITY)) {
+  if (command_interface_names_ != jointMotionControlInterfaceVector()) {
     RCLCPP_ERROR(
       get_node()->get_logger(),
-      "Velocity command interface is configurable but not implemented yet; remove 'velocity' for now");
+      "EasyArmServoController requires fixed command interface order: position, velocity, kp, kd, effort");
     return false;
   }
   if (!std::any_of(
@@ -282,16 +312,6 @@ bool EasyArmServoController::configureInterfaces()
   return true;
 }
 
-bool EasyArmServoController::hasConfiguredCommandInterface(const std::string & interface_name) const
-{
-  return std::any_of(
-    command_interface_names_.begin(),
-    command_interface_names_.end(),
-    [&interface_name](const auto & configured_interface) {
-      return configured_interface == interface_name;
-    });
-}
-
 bool EasyArmServoController::readHoldPositionFromState()
 {
   for (size_t i = 0; i < joint_names_.size(); ++i) {
@@ -303,7 +323,10 @@ bool EasyArmServoController::readHoldPositionFromState()
         joint_names_[i].c_str());
       return false;
     }
-    hold_positions_[i] = position;
+    hold_commands_[i].position = position;
+    hold_commands_[i].velocity = 0.0;
+    hold_commands_[i].kp = kp_;
+    hold_commands_[i].kd = kd_;
   }
   return true;
 }
@@ -482,12 +505,13 @@ bool EasyArmServoController::commandTimedOut(
 
 void EasyArmServoController::writeHoldCommand()
 {
-  const auto count = std::min(joint_names_.size(), hold_positions_.size());
+  const auto count = std::min(joint_names_.size(), hold_commands_.size());
   for (size_t i = 0; i < count; ++i) {
-    command_interfaces_[commandIndex(i, hardware_interface::HW_IF_POSITION)].set_value(hold_positions_[i]);
-    if (hasConfiguredCommandInterface(hardware_interface::HW_IF_EFFORT)) {
-      command_interfaces_[commandIndex(i, hardware_interface::HW_IF_EFFORT)].set_value(hold_feedforward_efforts_[i]);
-    }
+    command_interfaces_[commandIndex(i, hardware_interface::HW_IF_POSITION)].set_value(hold_commands_[i].position);
+    command_interfaces_[commandIndex(i, hardware_interface::HW_IF_VELOCITY)].set_value(hold_commands_[i].velocity);
+    command_interfaces_[commandIndex(i, kCommandInterfaceKp)].set_value(hold_commands_[i].kp);
+    command_interfaces_[commandIndex(i, kCommandInterfaceKd)].set_value(hold_commands_[i].kd);
+    command_interfaces_[commandIndex(i, hardware_interface::HW_IF_EFFORT)].set_value(hold_commands_[i].effort);
   }
 }
 

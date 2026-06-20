@@ -13,7 +13,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50\n"
             "  set-mode DRAG\n"
             "  set-mode POSITION\n"
-            "  speedl_teleop    # in easyarm_shell: keyboard Cartesian teleop mode"
+            "  speedl_teleop    # in easyarm_shell: keyboard Cartesian teleop mode\n"
+            "  ss               # in easyarm_shell: safe_shutdown alias"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -110,5 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     safe_shutdown = subparsers.add_parser("safe_shutdown", help="Run safe shutdown and exit shell")
     safe_shutdown.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to safe_shutdown.sh")
+
+    ss = subparsers.add_parser("ss", help="Alias for safe_shutdown in easyarm_shell")
+    ss.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to safe_shutdown.sh")
 
     return parser

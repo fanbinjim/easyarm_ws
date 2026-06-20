@@ -44,10 +44,10 @@ enum class ControlMode
   Drag = 2
 };
 
-enum class EffortFeedforwardSource
+enum class FullCommandSource
 {
-  InternalGravity,
-  ControllerEffort
+  Hardware,
+  Controller
 };
 
 struct JointConfig
@@ -150,6 +150,8 @@ private:
 
   std::vector<double> hw_commands_positions_;
   std::vector<double> hw_commands_velocities_;
+  std::vector<double> hw_commands_kps_;
+  std::vector<double> hw_commands_kds_;
   std::vector<double> hw_commands_efforts_;
 
   double position_kp_{100.0};
@@ -173,7 +175,7 @@ private:
   MotorControlMode active_motor_mode_{MotorControlMode::MotionControl};
   ControlMode control_mode_{ControlMode::Position};
   std::atomic<int> requested_control_mode_{static_cast<int>(ControlMode::Position)};
-  EffortFeedforwardSource effort_feedforward_source_{EffortFeedforwardSource::InternalGravity};
+  FullCommandSource full_command_source_{FullCommandSource::Hardware};
 
   rclcpp::Node::SharedPtr control_mode_node_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr control_mode_param_callback_;

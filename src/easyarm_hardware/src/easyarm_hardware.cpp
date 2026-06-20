@@ -18,6 +18,8 @@ namespace
 {
 constexpr auto kRobotDescriptionTopic = "/robot_description";
 constexpr auto kRobotDescriptionTimeout = std::chrono::seconds(3);
+constexpr const char * kCommandInterfaceKp = "kp";
+constexpr const char * kCommandInterfaceKd = "kd";
 }
 
 using robstride_can::getMotorParams;
@@ -119,6 +121,8 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
   hw_temperatures_.assign(num_joints, 0.0);
   hw_commands_positions_.assign(num_joints, 0.0);
   hw_commands_velocities_.assign(num_joints, 0.0);
+  hw_commands_kps_.assign(num_joints, position_kp_);
+  hw_commands_kds_.assign(num_joints, position_kd_);
   hw_commands_efforts_.assign(num_joints, 0.0);
 
   smoothed_positions_.assign(num_joints, 0.0);
@@ -466,6 +470,8 @@ std::vector<hardware_interface::CommandInterface> EasyArmHardware::export_comman
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     command_interfaces.emplace_back(joint_configs_[i].name, hardware_interface::HW_IF_POSITION, &hw_commands_positions_[i]);
     command_interfaces.emplace_back(joint_configs_[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_velocities_[i]);
+    command_interfaces.emplace_back(joint_configs_[i].name, kCommandInterfaceKp, &hw_commands_kps_[i]);
+    command_interfaces.emplace_back(joint_configs_[i].name, kCommandInterfaceKd, &hw_commands_kds_[i]);
     command_interfaces.emplace_back(joint_configs_[i].name, hardware_interface::HW_IF_EFFORT, &hw_commands_efforts_[i]);
   }
 
@@ -476,15 +482,16 @@ hardware_interface::return_type EasyArmHardware::prepare_command_mode_switch(
   const std::vector<std::string> & start_interfaces,
   const std::vector<std::string> &)
 {
-  const auto is_known_effort_interface = [this](const std::string & interface_name) {
+  const auto is_known_controller_full_command_interface = [this](const std::string & interface_name) {
     return std::any_of(joint_configs_.begin(), joint_configs_.end(), [&interface_name](const auto & joint) {
-      return interface_name == joint.name + "/" + hardware_interface::HW_IF_EFFORT;
+      return interface_name == joint.name + "/" + kCommandInterfaceKp ||
+        interface_name == joint.name + "/" + kCommandInterfaceKd;
     });
   };
-  const bool starts_effort_command = std::any_of(
-    start_interfaces.begin(), start_interfaces.end(), is_known_effort_interface);
-  if (starts_effort_command && !enable_gravity_compensation_) {
-    RCLCPP_ERROR(logger_, "Controller effort command requires enable_gravity_compensation=true");
+  const bool starts_controller_full_command = std::any_of(
+    start_interfaces.begin(), start_interfaces.end(), is_known_controller_full_command_interface);
+  if (starts_controller_full_command && !enable_gravity_compensation_) {
+    RCLCPP_ERROR(logger_, "Controller full command requires enable_gravity_compensation=true");
     return hardware_interface::return_type::ERROR;
   }
 
@@ -495,22 +502,23 @@ hardware_interface::return_type EasyArmHardware::perform_command_mode_switch(
   const std::vector<std::string> & start_interfaces,
   const std::vector<std::string> & stop_interfaces)
 {
-  const auto is_known_effort_interface = [this](const std::string & interface_name) {
+  const auto is_known_controller_full_command_interface = [this](const std::string & interface_name) {
     return std::any_of(joint_configs_.begin(), joint_configs_.end(), [&interface_name](const auto & joint) {
-      return interface_name == joint.name + "/" + hardware_interface::HW_IF_EFFORT;
+      return interface_name == joint.name + "/" + kCommandInterfaceKp ||
+        interface_name == joint.name + "/" + kCommandInterfaceKd;
     });
   };
-  const bool starts_effort_command = std::any_of(
-    start_interfaces.begin(), start_interfaces.end(), is_known_effort_interface);
-  const bool stops_effort_command = std::any_of(
-    stop_interfaces.begin(), stop_interfaces.end(), is_known_effort_interface);
+  const bool starts_controller_full_command = std::any_of(
+    start_interfaces.begin(), start_interfaces.end(), is_known_controller_full_command_interface);
+  const bool stops_controller_full_command = std::any_of(
+    stop_interfaces.begin(), stop_interfaces.end(), is_known_controller_full_command_interface);
 
-  if (starts_effort_command) {
-    effort_feedforward_source_ = EffortFeedforwardSource::ControllerEffort;
-    RCLCPP_INFO(logger_, "Effort feedforward source switched to controller_effort");
-  } else if (stops_effort_command) {
-    effort_feedforward_source_ = EffortFeedforwardSource::InternalGravity;
-    RCLCPP_INFO(logger_, "Effort feedforward source switched to internal_gravity");
+  if (starts_controller_full_command) {
+    full_command_source_ = FullCommandSource::Controller;
+    RCLCPP_INFO(logger_, "Full command source switched to controller");
+  } else if (stops_controller_full_command) {
+    full_command_source_ = FullCommandSource::Hardware;
+    RCLCPP_INFO(logger_, "Full command source switched to hardware");
   }
 
   return hardware_interface::return_type::OK;
@@ -630,7 +638,7 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
 
   const bool position_uses_internal_gravity =
     control_mode_ == ControlMode::Position &&
-    effort_feedforward_source_ == EffortFeedforwardSource::InternalGravity;
+    full_command_source_ == FullCommandSource::Hardware;
   const bool mode_needs_gravity = position_uses_internal_gravity || control_mode_ == ControlMode::Drag;
   const bool need_gravity_torque = mode_needs_gravity && enable_gravity_compensation_ && robot_model_ &&
     active_motor_mode_ == MotorControlMode::MotionControl;
@@ -759,15 +767,16 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
 
     const double motor_position = smoothed_positions_[i] * config.direction + config.position_offset;
     const double motor_velocity = velocity_ff_stage2_[i] * config.direction;
+    const bool uses_controller_full_command = full_command_source_ == FullCommandSource::Controller;
     const double joint_torque =
-      effort_feedforward_source_ == EffortFeedforwardSource::ControllerEffort ?
+      uses_controller_full_command ?
       hw_commands_efforts_[i] :
       (gravity_torque_available ?
         gravity_torques_[static_cast<Eigen::Index>(i)] * gravity_compensation_scale_ : 0.0);
     const double max_torque = motor_params.t_max * control_torque_limit_scale_;
     const double motor_torque = std::clamp(joint_torque * config.direction, -max_torque, max_torque);
-    const double command_kp = 80.0;
-    constexpr double command_kd = 5.0;
+    const double command_kp = uses_controller_full_command ? hw_commands_kps_[i] : 80.0;
+    const double command_kd = uses_controller_full_command ? hw_commands_kds_[i] : 5.0;
     const double command_velocity = motor_velocity;
     const double command_torque = motor_torque;
 
@@ -1165,6 +1174,8 @@ void EasyArmHardware::sync_states_to_commands()
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     hw_commands_positions_[i] = hw_positions_[i];
     hw_commands_velocities_[i] = 0.0;
+    hw_commands_kps_[i] = position_kp_;
+    hw_commands_kds_[i] = position_kd_;
     hw_commands_efforts_[i] = 0.0;
     smoothed_positions_[i] = hw_positions_[i];
     smoothed_velocities_[i] = 0.0;

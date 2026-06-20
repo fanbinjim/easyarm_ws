@@ -1,6 +1,6 @@
 def run_command(node, args) -> int:
-    if args.command == "safe_shutdown":
-        node.get_logger().error("safe_shutdown is only supported by easyarm_shell")
+    if args.command in ("safe_shutdown", "ss"):
+        node.get_logger().error(f"{args.command} is only supported by easyarm_shell")
         return 1
     if args.command == "movej":
         return node.movej(args)
