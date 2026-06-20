@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <future>
+#include <vector>
 
 namespace easyarm_motion_server
 {
@@ -182,7 +183,17 @@ bool MoveItServoExecutor::switchControllers(
   if (!deactivate_state.has_value()) {
     return false;
   }
-  if (*activate_state == "active" && *deactivate_state != "active") {
+  std::vector<std::string> activate_controllers;
+  std::vector<std::string> deactivate_controllers;
+
+  if (*activate_state != "active") {
+    activate_controllers.push_back(activate);
+  }
+  if (*deactivate_state == "active") {
+    deactivate_controllers.push_back(deactivate);
+  }
+
+  if (activate_controllers.empty() && deactivate_controllers.empty()) {
     return true;
   }
 
@@ -192,8 +203,8 @@ bool MoveItServoExecutor::switchControllers(
   }
 
   auto request = std::make_shared<controller_manager_msgs::srv::SwitchController::Request>();
-  request->activate_controllers.push_back(activate);
-  request->deactivate_controllers.push_back(deactivate);
+  request->activate_controllers = activate_controllers;
+  request->deactivate_controllers = deactivate_controllers;
   request->strictness = controller_manager_msgs::srv::SwitchController::Request::STRICT;
   request->activate_asap = true;
   request->timeout = secondsToDuration(3.0);

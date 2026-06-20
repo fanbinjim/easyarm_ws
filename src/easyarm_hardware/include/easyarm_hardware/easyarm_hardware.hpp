@@ -22,6 +22,7 @@
 #include "rclcpp/node.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
+#include "std_msgs/msg/string.hpp"
 
 namespace easyarm_hardware
 {
@@ -41,6 +42,12 @@ enum class ControlMode
   Idle = 0,
   Position = 1,
   Drag = 2
+};
+
+enum class EffortFeedforwardSource
+{
+  InternalGravity,
+  ControllerEffort
 };
 
 struct JointConfig
@@ -97,6 +104,7 @@ private:
   uint8_t parse_u8_parameter(const std::string & value, uint8_t default_value) const;
   double parse_double_parameter(const std::string & value, double default_value) const;
   bool parse_bool_parameter(const std::string & value, bool default_value) const;
+  bool wait_for_robot_description(std::string & robot_description, std::string & message) const;
   void start_control_mode_node();
   void stop_control_mode_node();
   rcl_interfaces::msg::SetParametersResult on_control_mode_parameters(
@@ -165,6 +173,7 @@ private:
   MotorControlMode active_motor_mode_{MotorControlMode::MotionControl};
   ControlMode control_mode_{ControlMode::Position};
   std::atomic<int> requested_control_mode_{static_cast<int>(ControlMode::Position)};
+  EffortFeedforwardSource effort_feedforward_source_{EffortFeedforwardSource::InternalGravity};
 
   rclcpp::Node::SharedPtr control_mode_node_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr control_mode_param_callback_;

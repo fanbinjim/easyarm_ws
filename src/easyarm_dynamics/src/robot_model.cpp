@@ -35,6 +35,23 @@ pinocchio::Model buildModelFromUrdf(const std::string & urdf_path)
   return model;
 }
 
+pinocchio::Model buildModelFromUrdfXml(const std::string & urdf_xml)
+{
+  if (urdf_xml.empty()) {
+    throw std::invalid_argument("URDF XML must not be empty.");
+  }
+
+  pinocchio::Model model;
+  try {
+    pinocchio::urdf::buildModelFromXML(urdf_xml, model);
+  } catch (const std::exception & exception) {
+    throw std::runtime_error(
+      std::string("Failed to build Pinocchio model from URDF XML: ") + exception.what());
+  }
+
+  return model;
+}
+
 std::string sizeErrorMessage(
   const char * name,
   Eigen::Index expected,
@@ -48,6 +65,17 @@ std::string sizeErrorMessage(
 
 RobotModel::RobotModel(const std::string & urdf_path)
 : model_(buildModelFromUrdf(urdf_path)),
+  data_(model_)
+{
+}
+
+RobotModel RobotModel::fromUrdfXml(const std::string & urdf_xml)
+{
+  return RobotModel(buildModelFromUrdfXml(urdf_xml));
+}
+
+RobotModel::RobotModel(pinocchio::Model model)
+: model_(std::move(model)),
   data_(model_)
 {
 }

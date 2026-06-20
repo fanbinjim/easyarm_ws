@@ -1,6 +1,6 @@
 # easyarm_dynamics
 
-`easyarm_dynamics` 是 EasyArm 的动力学计算包。当前模块基于 Pinocchio，提供一个轻量的 C++ `RobotModel` 封装，用于从 URDF 加载机械臂模型并计算刚体动力学项。
+`easyarm_dynamics` 是 EasyArm 的动力学计算包。当前模块基于 Pinocchio，提供一个轻量的 C++ `RobotModel` 封装，用于从 URDF XML 加载机械臂模型并计算刚体动力学项。
 
 该包只负责动力学计算，不包含控制策略、硬件接口或 MoveIt 相关逻辑。
 
@@ -70,7 +70,8 @@ source install/setup.bash
 
 int main()
 {
-  easyarm_dynamics::RobotModel model("/path/to/robot.urdf");
+  std::string urdf_xml = "...";
+  auto model = easyarm_dynamics::RobotModel::fromUrdfXml(urdf_xml);
 
   Eigen::VectorXd q = Eigen::VectorXd::Zero(model.nq());
   Eigen::VectorXd qd = Eigen::VectorXd::Zero(model.nv());
@@ -88,6 +89,9 @@ int main()
 ## API
 
 ```cpp
+static RobotModel fromUrdfXml(const std::string & urdf_xml);
+
+[[deprecated]]
 explicit RobotModel(const std::string & urdf_path);
 
 Eigen::VectorXd gravity(const Eigen::VectorXd & q);
@@ -106,12 +110,13 @@ Eigen::Index nv() const noexcept;
 
 本包只做：
 
-- URDF 到 Pinocchio model 的加载
+- URDF XML 到 Pinocchio model 的加载
 - 刚体动力学计算
 - 面向控制层的 clean API
 
 本包不做：
 
+- 订阅 `/robot_description`
 - impedance control
 - reinforcement learning
 - mode switch

@@ -42,7 +42,7 @@ ros2 param get /easyarm_hardware_control_mode controller_mode
 
 - 底层电机模式为 `motion_control`。
 - `enable_gravity_compensation=true`。
-- `RobotModel` 已经从 `urdf_path` 成功加载。
+- `RobotModel` 已经从 `/robot_description` topic 成功加载。
 
 相关参数在 `src/easyarm_a1_moveit_config/config/easyarm_a1.ros2_control.xacro`：
 
@@ -54,6 +54,14 @@ ros2 param get /easyarm_hardware_control_mode controller_mode
 <param name="drag_kd">1.0</param>
 <param name="control_torque_limit_scale">0.5</param>
 ```
+
+`urdf_path` 兼容字段暂时保留在 ros2_control xacro 中，但 hardware 生产链路不再用它加载动力学模型。启用重力补偿时，hardware 只从 `/robot_description` 获取 URDF XML；如果超时获取失败，configure 会失败。
+
+`POSITION` 模式下 effort 前馈来源由 ros2_control command interface 自动判断，不提供外部参数：
+
+- `arm_controller` 未 claim `effort` command interface 时，使用 hardware 内部 `gravity(q)`。
+- `easyarm_servo_controller` claim `effort` command interface 时，使用 controller 写入的 `HW_IF_EFFORT`。
+- `DRAG` 始终使用 hardware 内部 gravity + damping，不受 controller effort 影响。
 
 ## 250Hz 调试日志
 
@@ -108,5 +116,6 @@ python3 src/easyarm_hardware/scripts/decode_debug_log.py \
 ## TODO
 
 - 当前 `IDLE`、`POSITION`、`DRAG` 控制逻辑直接写在 `easyarm_hardware` 中，与硬件接口耦合较大，仅作为真机调试和快速验证的临时方案。
-- 待拖拽模式、重力补偿和模式切换稳定后，将控制模式管理、重力补偿、阻尼控制上提到独立 `easyarm_controller`。
+- `SERVO` 链路已经开始由 `easyarm_servo_controller` 写入 controller effort；当前 effort 内容是 gravity feedforward。`MoveJ/MoveL` 和 `DRAG` 仍保留 hardware 内部重力补偿。
+- 待拖拽模式、重力补偿和模式切换稳定后，将更多控制模式管理、阻尼控制上提到独立 `easyarm_controller`。
 - 长期目标是让 `easyarm_hardware` 只保留硬件读写、安全限幅和底层状态同步，控制策略由 controller 层负责。

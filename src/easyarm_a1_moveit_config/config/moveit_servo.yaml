@@ -50,7 +50,7 @@ status_topic: ~/status
 # EasyArmServoController supports two output formats:
 # 1. trajectory_msgs/JointTrajectory -> /easyarm_servo_controller/joint_trajectory
 #    Carries positions, velocities, and accelerations. This is the default path.
-# 2. std_msgs/Float64MultiArray -> /easyarm_servo_controller/position_commands
+# 2. std_msgs/Float64MultiArray -> /easyarm_servo_controller/joint_positions
 #    Position-only fallback. If using this path, set publish_joint_velocities and
 #    publish_joint_accelerations to false because Humble Servo requires
 #    Float64MultiArray output to be positions OR velocities, not both.
@@ -64,7 +64,7 @@ publish_joint_accelerations: true
 # Float64MultiArray position-only fallback:
 
 # command_out_type: std_msgs/Float64MultiArray
-# command_out_topic: /easyarm_servo_controller/position_commands
+# command_out_topic: /easyarm_servo_controller/joint_positions
 # publish_joint_positions: true
 # publish_joint_velocities: false
 # publish_joint_accelerations: false

@@ -8,6 +8,8 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(controller_interface REQUIRED)
+find_package(easyarm_dynamics REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -17,6 +19,7 @@ find_package(std_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 
 add_library(easyarm_controller SHARED
+  src/dynamics_provider.cpp
   src/easyarm_servo_controller.cpp
 )
 target_include_directories(easyarm_controller PUBLIC
@@ -25,6 +28,7 @@ target_include_directories(easyarm_controller PUBLIC
 )
 ament_target_dependencies(easyarm_controller
   controller_interface
+  easyarm_dynamics
   hardware_interface
   pluginlib
   rclcpp
@@ -32,6 +36,9 @@ ament_target_dependencies(easyarm_controller
   realtime_tools
   std_msgs
   trajectory_msgs
+)
+target_link_libraries(easyarm_controller
+  Eigen3::Eigen
 )
 pluginlib_export_plugin_description_file(
   controller_interface
@@ -66,6 +73,8 @@ ament_export_include_directories(include)
 ament_export_targets(export_easyarm_controller HAS_LIBRARY_TARGET)
 ament_export_dependencies(
   controller_interface
+  easyarm_dynamics
+  Eigen3
   hardware_interface
   pluginlib
   rclcpp

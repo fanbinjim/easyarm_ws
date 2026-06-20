@@ -13,6 +13,7 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(easyarm_dynamics REQUIRED)
 find_package(robstride_can REQUIRED)
 
@@ -33,6 +34,7 @@ ament_target_dependencies(${PROJECT_NAME}
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  std_msgs
   easyarm_dynamics
   robstride_can
 )
@@ -69,6 +71,7 @@ ament_export_dependencies(
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  std_msgs
   easyarm_dynamics
   robstride_can
 )

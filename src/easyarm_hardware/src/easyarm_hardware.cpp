@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 
@@ -13,6 +14,11 @@
 
 namespace easyarm_hardware
 {
+namespace
+{
+constexpr auto kRobotDescriptionTopic = "/robot_description";
+constexpr auto kRobotDescriptionTimeout = std::chrono::seconds(3);
+}
 
 using robstride_can::getMotorParams;
 using robstride_can::motorTypeName;
@@ -150,14 +156,13 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
     use_mock_hardware_ ? "true" : "false");
   RCLCPP_INFO(
     logger_,
-    "Gravity compensation: enabled=%s, position_scale=%.2f, idle_kd=%.2f, drag_scale=%.2f, drag_kd=%.2f, torque_limit_scale=%.2f, urdf=%s",
+    "Gravity compensation: enabled=%s, position_scale=%.2f, idle_kd=%.2f, drag_scale=%.2f, drag_kd=%.2f, torque_limit_scale=%.2f, model_source=/robot_description",
     enable_gravity_compensation_ ? "true" : "false",
     gravity_compensation_scale_,
     idle_kd_,
     drag_gravity_scale_,
     drag_kd_,
-    control_torque_limit_scale_,
-    urdf_path_.empty() ? "<empty>" : urdf_path_.c_str());
+    control_torque_limit_scale_);
   RCLCPP_INFO(logger_, "Initial hardware control mode: %s", hardware_control_mode_name(control_mode_));
   RCLCPP_INFO(logger_, "Desired motor control mode: %s", control_mode_name(desired_motor_mode_));
   RCLCPP_INFO(
@@ -249,13 +254,16 @@ hardware_interface::CallbackReturn EasyArmHardware::on_configure(const rclcpp_li
 
   robot_model_.reset();
   if (enable_gravity_compensation_) {
-    if (urdf_path_.empty()) {
-      RCLCPP_ERROR(logger_, "Gravity compensation enabled but urdf_path is empty");
+    std::string robot_description;
+    std::string message;
+    if (!wait_for_robot_description(robot_description, message)) {
+      RCLCPP_ERROR(logger_, "Gravity compensation enabled but %s", message.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
 
     try {
-      robot_model_ = std::make_unique<easyarm_dynamics::RobotModel>(urdf_path_);
+      robot_model_ = std::make_unique<easyarm_dynamics::RobotModel>(
+        easyarm_dynamics::RobotModel::fromUrdfXml(robot_description));
     } catch (const std::exception & exception) {
       RCLCPP_ERROR(logger_, "Failed to load dynamics model: %s", exception.what());
       return hardware_interface::CallbackReturn::ERROR;
@@ -465,16 +473,46 @@ std::vector<hardware_interface::CommandInterface> EasyArmHardware::export_comman
 }
 
 hardware_interface::return_type EasyArmHardware::prepare_command_mode_switch(
-  const std::vector<std::string> &,
+  const std::vector<std::string> & start_interfaces,
   const std::vector<std::string> &)
 {
+  const auto is_known_effort_interface = [this](const std::string & interface_name) {
+    return std::any_of(joint_configs_.begin(), joint_configs_.end(), [&interface_name](const auto & joint) {
+      return interface_name == joint.name + "/" + hardware_interface::HW_IF_EFFORT;
+    });
+  };
+  const bool starts_effort_command = std::any_of(
+    start_interfaces.begin(), start_interfaces.end(), is_known_effort_interface);
+  if (starts_effort_command && !enable_gravity_compensation_) {
+    RCLCPP_ERROR(logger_, "Controller effort command requires enable_gravity_compensation=true");
+    return hardware_interface::return_type::ERROR;
+  }
+
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type EasyArmHardware::perform_command_mode_switch(
-  const std::vector<std::string> &,
-  const std::vector<std::string> &)
+  const std::vector<std::string> & start_interfaces,
+  const std::vector<std::string> & stop_interfaces)
 {
+  const auto is_known_effort_interface = [this](const std::string & interface_name) {
+    return std::any_of(joint_configs_.begin(), joint_configs_.end(), [&interface_name](const auto & joint) {
+      return interface_name == joint.name + "/" + hardware_interface::HW_IF_EFFORT;
+    });
+  };
+  const bool starts_effort_command = std::any_of(
+    start_interfaces.begin(), start_interfaces.end(), is_known_effort_interface);
+  const bool stops_effort_command = std::any_of(
+    stop_interfaces.begin(), stop_interfaces.end(), is_known_effort_interface);
+
+  if (starts_effort_command) {
+    effort_feedforward_source_ = EffortFeedforwardSource::ControllerEffort;
+    RCLCPP_INFO(logger_, "Effort feedforward source switched to controller_effort");
+  } else if (stops_effort_command) {
+    effort_feedforward_source_ = EffortFeedforwardSource::InternalGravity;
+    RCLCPP_INFO(logger_, "Effort feedforward source switched to internal_gravity");
+  }
+
   return hardware_interface::return_type::OK;
 }
 
@@ -590,7 +628,10 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
   // for 200Hz system, use 5.2ms for deadline 
   auto write_deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(5200);
 
-  const bool mode_needs_gravity = control_mode_ == ControlMode::Position || control_mode_ == ControlMode::Drag;
+  const bool position_uses_internal_gravity =
+    control_mode_ == ControlMode::Position &&
+    effort_feedforward_source_ == EffortFeedforwardSource::InternalGravity;
+  const bool mode_needs_gravity = position_uses_internal_gravity || control_mode_ == ControlMode::Drag;
   const bool need_gravity_torque = mode_needs_gravity && enable_gravity_compensation_ && robot_model_ &&
     active_motor_mode_ == MotorControlMode::MotionControl;
   bool gravity_torque_available = need_gravity_torque;
@@ -718,8 +759,11 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
 
     const double motor_position = smoothed_positions_[i] * config.direction + config.position_offset;
     const double motor_velocity = velocity_ff_stage2_[i] * config.direction;
-    const double joint_torque = gravity_torque_available ?
-      gravity_torques_[static_cast<Eigen::Index>(i)] * gravity_compensation_scale_ : hw_commands_efforts_[i];
+    const double joint_torque =
+      effort_feedforward_source_ == EffortFeedforwardSource::ControllerEffort ?
+      hw_commands_efforts_[i] :
+      (gravity_torque_available ?
+        gravity_torques_[static_cast<Eigen::Index>(i)] * gravity_compensation_scale_ : 0.0);
     const double max_torque = motor_params.t_max * control_torque_limit_scale_;
     const double motor_torque = std::clamp(joint_torque * config.direction, -max_torque, max_torque);
     const double command_kp = 80.0;
@@ -906,6 +950,41 @@ bool EasyArmHardware::parse_bool_parameter(const std::string & value, bool defau
     return false;
   }
   return default_value;
+}
+
+bool EasyArmHardware::wait_for_robot_description(std::string & robot_description, std::string & message) const
+{
+  auto node = std::make_shared<rclcpp::Node>("easyarm_hardware_robot_description_loader");
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+
+  bool received = false;
+  auto subscription = node->create_subscription<std_msgs::msg::String>(
+    kRobotDescriptionTopic,
+    rclcpp::QoS(1).transient_local().reliable(),
+    [&robot_description, &received](const std_msgs::msg::String::SharedPtr msg) {
+      if (!msg->data.empty()) {
+        robot_description = msg->data;
+        received = true;
+      }
+    });
+
+  const auto start = std::chrono::steady_clock::now();
+  while (rclcpp::ok() && !received && std::chrono::steady_clock::now() - start < kRobotDescriptionTimeout) {
+    executor.spin_some(std::chrono::milliseconds(50));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  executor.remove_node(node);
+  subscription.reset();
+
+  if (!received) {
+    message = "timed out waiting for /robot_description";
+    return false;
+  }
+
+  message = "OK";
+  return true;
 }
 
 void EasyArmHardware::start_control_mode_node()

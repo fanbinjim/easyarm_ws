@@ -28,8 +28,18 @@ public:
   /**
    * @brief 从 URDF 文件加载 Pinocchio 刚体动力学模型
    * @param urdf_path URDF 文件路径
+   *
+   * @deprecated 生产链路应使用 fromUrdfXml()，由调用方从 /robot_description 获取 URDF XML。
    */
+  [[deprecated("Use RobotModel::fromUrdfXml() with /robot_description URDF XML instead.")]]
   explicit RobotModel(const std::string & urdf_path);
+
+  /**
+   * @brief 从 URDF XML 字符串加载 Pinocchio 刚体动力学模型
+   * @param urdf_xml URDF XML 字符串，通常来自 /robot_description
+   * @return Pinocchio 机器人动力学模型
+   */
+  static RobotModel fromUrdfXml(const std::string & urdf_xml);
 
   /**
    * @brief 计算广义重力力矩 g(q)
@@ -78,6 +88,8 @@ public:
   Eigen::Index nv() const noexcept;
 
 private:
+  explicit RobotModel(pinocchio::Model model);
+
   void validateConfiguration(const Eigen::VectorXd & q) const;
   void validateTangentVector(const Eigen::VectorXd & vector, const char * name) const;
 

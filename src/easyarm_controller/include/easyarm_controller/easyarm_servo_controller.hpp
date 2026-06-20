@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <controller_interface/controller_interface.hpp>
+#include <easyarm_controller/dynamics_provider.hpp>
 #include <rclcpp/subscription.hpp>
 #include <rclcpp_lifecycle/state.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
@@ -17,9 +18,9 @@ namespace easyarm_controller
 /**
  * @brief EasyArm 实时伺服控制器第一版。
  *
- * 该控制器第一版只 claim position command interface。Float64MultiArray
+ * 该控制器 claim position 和 effort command interface。Float64MultiArray
  * 输入被解释为 position-only；JointTrajectory 输入会解析 position、velocity
- * 和 acceleration，但本版只把 position 写给 hardware。
+ * 和 acceleration，但运动目标仍只取 position，effort 由 gravity(q) 计算得到。
  */
 class EasyArmServoController : public controller_interface::ControllerInterface
 {
@@ -29,16 +30,11 @@ public:
   controller_interface::InterfaceConfiguration command_interface_configuration() const override;
   controller_interface::InterfaceConfiguration state_interface_configuration() const override;
 
-  controller_interface::CallbackReturn on_configure(
-    const rclcpp_lifecycle::State & previous_state) override;
-  controller_interface::CallbackReturn on_activate(
-    const rclcpp_lifecycle::State & previous_state) override;
-  controller_interface::CallbackReturn on_deactivate(
-    const rclcpp_lifecycle::State & previous_state) override;
+  controller_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
+  controller_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
+  controller_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
 
-  controller_interface::return_type update(
-    const rclcpp::Time & time,
-    const rclcpp::Duration & period) override;
+  controller_interface::return_type update(const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
   using ArrayCommandMsg = std_msgs::msg::Float64MultiArray;
@@ -55,33 +51,33 @@ private:
     std::string source;
   };
 
-  std::vector<std::string> interfaceNames(const std::string & interface_name) const;
+  std::vector<std::string> interfaceNames(const std::vector<std::string> & interface_names) const;
+  bool configureInterfaces();
+  bool hasConfiguredCommandInterface(const std::string & interface_name) const;
   bool readHoldPositionFromState();
   void arrayCommandCallback(const ArrayCommandMsg::SharedPtr message);
   void trajectoryCommandCallback(const TrajectoryCommandMsg::SharedPtr message);
-  bool parseArrayCommand(
-    const ArrayCommandMsg & message,
-    CommandData & command) const;
-  bool parseTrajectoryCommand(
-    const TrajectoryCommandMsg & message,
-    CommandData & command) const;
-  bool copyTrajectoryField(
-    const std::vector<double> & input,
-    const std::vector<int> & joint_index_map,
-    const char * field_name,
-    std::vector<double> & output) const;
-  bool commandTimedOut(
-    const rclcpp::Time & time,
-    const CommandData & command) const;
+  bool parseArrayCommand(const ArrayCommandMsg & message, CommandData & command) const;
+  bool parseTrajectoryCommand(const TrajectoryCommandMsg & message, CommandData & command) const;
+  bool copyTrajectoryField(const std::vector<double> & input, const std::vector<int> & joint_index_map, const char * field_name, std::vector<double> & output) const;
+  bool commandTimedOut(const rclcpp::Time & time, const CommandData & command) const;
   void writeHoldCommand();
+  size_t commandIndex(size_t joint_index, const std::string & interface_name) const;
+  size_t stateIndex(size_t joint_index, const std::string & interface_name) const;
 
   std::vector<std::string> joint_names_;
+  std::vector<std::string> command_interface_names_;
+  std::vector<std::string> state_interface_names_;
   std::vector<double> hold_positions_;
+  std::vector<double> hold_feedforward_efforts_;
   std::vector<double> last_velocities_;
   std::vector<double> last_accelerations_;
   bool has_last_velocities_{false};
   bool has_last_accelerations_{false};
   double command_timeout_sec_{0.2};
+  bool enable_gravity_compensation_{true};
+  double gravity_compensation_scale_{1.0};
+  DynamicsProvider dynamics_provider_;
 
   rclcpp::Subscription<ArrayCommandMsg>::SharedPtr array_command_subscriber_;
   rclcpp::Subscription<TrajectoryCommandMsg>::SharedPtr trajectory_command_subscriber_;
