@@ -26,7 +26,7 @@ add_executable(easyarm_motion_server
   src/joint_state_cache.cpp
   src/hardware_mode_client.cpp
   src/hold_trajectory_sender.cpp
-  src/moveit_servo_executor.cpp
+  src/moveit_servo_runtime.cpp
   src/moveit_motion_executor.cpp)
 target_include_directories(
   easyarm_motion_server

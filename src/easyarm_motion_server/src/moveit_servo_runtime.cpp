@@ -1,4 +1,4 @@
-#include "easyarm_motion_server/moveit_servo_executor.hpp"
+#include "easyarm_motion_server/moveit_servo_runtime.hpp"
 
 #include <chrono>
 #include <future>
@@ -20,7 +20,7 @@ builtin_interfaces::msg::Duration secondsToDuration(const double seconds)
 }
 }  // namespace
 
-MoveItServoExecutor::MoveItServoExecutor(
+MoveItServoRuntime::MoveItServoRuntime(
   rclcpp::Node & node,
   const rclcpp::CallbackGroup::SharedPtr & callback_group)
 : node_(node),
@@ -60,13 +60,13 @@ MoveItServoExecutor::MoveItServoExecutor(
     rclcpp::QoS(10));
 }
 
-bool MoveItServoExecutor::isActive() const
+bool MoveItServoRuntime::isActive() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return servo_runtime_active_;
 }
 
-bool MoveItServoExecutor::enterServoRuntime(const std::string & task, std::string & message)
+bool MoveItServoRuntime::enterServoRuntime(const std::string & task, std::string & message)
 {
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -102,7 +102,7 @@ bool MoveItServoExecutor::enterServoRuntime(const std::string & task, std::strin
   return true;
 }
 
-bool MoveItServoExecutor::exitServoRuntime(std::string & message)
+bool MoveItServoRuntime::exitServoRuntime(std::string & message)
 {
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -137,7 +137,7 @@ bool MoveItServoExecutor::exitServoRuntime(std::string & message)
   return true;
 }
 
-void MoveItServoExecutor::stop()
+void MoveItServoRuntime::stop()
 {
   std::string message;
   if (!exitServoRuntime(message)) {
@@ -145,21 +145,21 @@ void MoveItServoExecutor::stop()
   }
 }
 
-void MoveItServoExecutor::forwardSpeedJ(const control_msgs::msg::JointJog & command)
+void MoveItServoRuntime::forwardSpeedJ(const control_msgs::msg::JointJog & command)
 {
   speedj_pub_->publish(command);
   std::lock_guard<std::mutex> lock(mutex_);
   last_command_time_ = node_.get_clock()->now();
 }
 
-void MoveItServoExecutor::forwardSpeedL(const geometry_msgs::msg::TwistStamped & command)
+void MoveItServoRuntime::forwardSpeedL(const geometry_msgs::msg::TwistStamped & command)
 {
   speedl_pub_->publish(command);
   std::lock_guard<std::mutex> lock(mutex_);
   last_command_time_ = node_.get_clock()->now();
 }
 
-void MoveItServoExecutor::update()
+void MoveItServoRuntime::update()
 {
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -178,7 +178,7 @@ void MoveItServoExecutor::update()
   }
 }
 
-bool MoveItServoExecutor::switchControllers(
+bool MoveItServoRuntime::switchControllers(
   const std::string & activate,
   const std::string & deactivate,
   std::string & message)
@@ -232,7 +232,7 @@ bool MoveItServoExecutor::switchControllers(
   return true;
 }
 
-std::optional<std::string> MoveItServoExecutor::controllerState(
+std::optional<std::string> MoveItServoRuntime::controllerState(
   const std::string & controller_name,
   std::string & message)
 {
@@ -259,7 +259,7 @@ std::optional<std::string> MoveItServoExecutor::controllerState(
   return std::nullopt;
 }
 
-bool MoveItServoExecutor::startMoveItServo(std::string & message)
+bool MoveItServoRuntime::startMoveItServo(std::string & message)
 {
   auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
   auto future = start_servo_client_->async_send_request(request);
@@ -277,7 +277,7 @@ bool MoveItServoExecutor::startMoveItServo(std::string & message)
   return true;
 }
 
-void MoveItServoExecutor::publishZeroCommands()
+void MoveItServoRuntime::publishZeroCommands()
 {
   for (int index = 0; index < halt_message_count_; ++index) {
     publishZeroJointJog();
@@ -286,7 +286,7 @@ void MoveItServoExecutor::publishZeroCommands()
   }
 }
 
-void MoveItServoExecutor::publishZeroJointJog()
+void MoveItServoRuntime::publishZeroJointJog()
 {
   control_msgs::msg::JointJog message;
   message.header.stamp = node_.get_clock()->now();
@@ -296,7 +296,7 @@ void MoveItServoExecutor::publishZeroJointJog()
   speedj_pub_->publish(message);
 }
 
-void MoveItServoExecutor::publishZeroTwist()
+void MoveItServoRuntime::publishZeroTwist()
 {
   geometry_msgs::msg::TwistStamped message;
   message.header.stamp = node_.get_clock()->now();
@@ -304,7 +304,7 @@ void MoveItServoExecutor::publishZeroTwist()
   speedl_pub_->publish(message);
 }
 
-bool MoveItServoExecutor::hasTimedOut(const rclcpp::Time & now) const
+bool MoveItServoRuntime::hasTimedOut(const rclcpp::Time & now) const
 {
   return (now - last_command_time_).seconds() > servo_command_timeout_sec_;
 }

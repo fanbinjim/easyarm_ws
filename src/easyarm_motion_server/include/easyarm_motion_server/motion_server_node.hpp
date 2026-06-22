@@ -20,7 +20,7 @@
 #include "easyarm_motion_server/joint_state_cache.hpp"
 #include "easyarm_motion_server/motion_context.hpp"
 #include "easyarm_motion_server/moveit_motion_executor.hpp"
-#include "easyarm_motion_server/moveit_servo_executor.hpp"
+#include "easyarm_motion_server/moveit_servo_runtime.hpp"
 #include "easyarm_motion_server/hold_trajectory_sender.hpp"
 
 namespace easyarm_motion_server
@@ -90,7 +90,7 @@ private:
   std::unique_ptr<HardwareModeClient> hardware_mode_client_;
   std::unique_ptr<HoldTrajectorySender> hold_trajectory_sender_;
   std::unique_ptr<MoveItMotionExecutor> moveit_executor_;
-  std::unique_ptr<MoveItServoExecutor> moveit_servo_executor_;
+  std::unique_ptr<MoveItServoRuntime> moveit_servo_runtime_;
 
   std::mutex state_mutex_;
   std::atomic_bool busy_{false};

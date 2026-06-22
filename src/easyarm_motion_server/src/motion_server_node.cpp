@@ -30,7 +30,7 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
   hardware_mode_client_ = std::make_unique<HardwareModeClient>(*this, callback_group_);
   hold_trajectory_sender_ = std::make_unique<HoldTrajectorySender>(*this, context_, *joint_state_cache_, callback_group_);
   moveit_executor_ = std::make_unique<MoveItMotionExecutor>(*this, context_);
-  moveit_servo_executor_ = std::make_unique<MoveItServoExecutor>(*this, callback_group_);
+  moveit_servo_runtime_ = std::make_unique<MoveItServoRuntime>(*this, callback_group_);
 
   movej_server_ = rclcpp_action::create_server<MoveJ>(
     this,
@@ -383,9 +383,9 @@ void MotionServerNode::handleStop(
 {
   stop_requested_.store(true);
   moveit_executor_->stop();
-  if (moveit_servo_executor_->isActive()) {
-    moveit_servo_executor_->stop();
-    if (!moveit_servo_executor_->isActive() && activeTaskSnapshot().rfind("Speed", 0) == 0) {
+  if (moveit_servo_runtime_->isActive()) {
+    moveit_servo_runtime_->stop();
+    if (!moveit_servo_runtime_->isActive() && activeTaskSnapshot().rfind("Speed", 0) == 0) {
       releaseTask();
     }
   }
@@ -456,7 +456,7 @@ void MotionServerNode::handleSpeedJCommand(control_msgs::msg::JointJog::SharedPt
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Reject SpeedJ: %s", message.c_str());
     return;
   }
-  moveit_servo_executor_->forwardSpeedJ(*command);
+  moveit_servo_runtime_->forwardSpeedJ(*command);
 }
 
 void MotionServerNode::handleSpeedLCommand(geometry_msgs::msg::TwistStamped::SharedPtr command)
@@ -466,24 +466,24 @@ void MotionServerNode::handleSpeedLCommand(geometry_msgs::msg::TwistStamped::Sha
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Reject SpeedL: %s", message.c_str());
     return;
   }
-  moveit_servo_executor_->forwardSpeedL(*command);
+  moveit_servo_runtime_->forwardSpeedL(*command);
 }
 
 void MotionServerNode::handleServoTimer()
 {
-  if (!moveit_servo_executor_->isActive()) {
+  if (!moveit_servo_runtime_->isActive()) {
     return;
   }
 
-  moveit_servo_executor_->update();
-  if (!moveit_servo_executor_->isActive() && activeTaskSnapshot().rfind("Speed", 0) == 0) {
+  moveit_servo_runtime_->update();
+  if (!moveit_servo_runtime_->isActive() && activeTaskSnapshot().rfind("Speed", 0) == 0) {
     releaseTask();
   }
 }
 
 bool MotionServerNode::prepareServoCommand(const std::string & task, std::string & message)
 {
-  if (moveit_servo_executor_->isActive()) {
+  if (moveit_servo_runtime_->isActive()) {
     const auto active_task = activeTaskSnapshot();
     if (active_task != task) {
       message = "SERVO runtime is busy with " + active_task;
@@ -513,7 +513,7 @@ bool MotionServerNode::prepareServoCommand(const std::string & task, std::string
   }
 
   moveit_executor_->stop();
-  if (!moveit_servo_executor_->enterServoRuntime(task, message)) {
+  if (!moveit_servo_runtime_->enterServoRuntime(task, message)) {
     releaseTask();
     return false;
   }

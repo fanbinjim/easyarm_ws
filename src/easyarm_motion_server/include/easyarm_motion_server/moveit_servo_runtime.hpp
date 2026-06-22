@@ -14,10 +14,10 @@
 namespace easyarm_motion_server
 {
 
-class MoveItServoExecutor
+class MoveItServoRuntime
 {
 public:
-  MoveItServoExecutor(
+  MoveItServoRuntime(
     rclcpp::Node & node,
     const rclcpp::CallbackGroup::SharedPtr & callback_group);
 
