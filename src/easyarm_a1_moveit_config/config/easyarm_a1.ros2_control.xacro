@@ -19,9 +19,9 @@
                 <param name="control_torque_limit_scale">1.0</param>
                 <param name="position_kp">50.0</param>
                 <param name="position_kd">4.0</param>
-                <param name="velocity_limit">10.0</param>
+                <param name="velocity_limit">32.97</param>
                 <param name="smoothing_alpha">0.8</param>
-                <param name="max_velocity">2.0</param>
+                <param name="max_velocity">32.97</param>
                 <param name="max_acceleration">8.0</param>
                 <param name="control_period">0.005</param>
                 <param name="control_mode">motion_control</param>

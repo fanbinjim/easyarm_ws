@@ -8,7 +8,7 @@
 easyarm_controller/EasyArmServoController
 ```
 
-该 controller 用于 `SERVO` 链路，接收 MoveIt Servo 的 200Hz 流式输出。当前版本固定输出完整关节运控 command 接口：`position + velocity + kp + kd + effort`。其中 `position` 来自上游输入，`velocity` 第一版固定写 `0.0`，`kp/kd` 来自 controller 参数，`effort` 由 `gravity(q_target)` 计算得到。
+该 controller 用于 `SERVO` 链路，接收 MoveIt Servo 的 200Hz 流式输出。当前版本固定输出完整关节运控 command 接口：`position + velocity + kp + kd + effort`。其中 `position` 来自上游输入，`velocity` 来自 `JointTrajectory.velocities`，`kp/kd` 来自 controller 参数，`effort` 由 `gravity(q_target)` 计算得到。
 
 ## Controller
 
@@ -87,7 +87,7 @@ Joint6/effort
 
 - `command_interfaces` 必须固定为 `position, velocity, kp, kd, effort`。
 - `kp/kd` 是 EasyArm 自定义 command interface，对应电机运控/力位混合控制字段。
-- `velocity` 第一版固定写 `0.0`，当前电机 velocity feed-forward 仍由 `easyarm_hardware` 基于 position 差分生成。
+- `velocity` 在 `JointTrajectory` 输入带 velocity 时直接写入 hardware command；`Float64MultiArray` position-only 输入时写 `0.0`。
 - `effort` 用于写入 controller feedforward effort。
 - `state_interfaces` 必须包含 `position`，可为后续扩展预留其他 state interface。
 
@@ -158,7 +158,7 @@ publish_joint_accelerations: true
 
 - `publish_period: 0.005` 对应 200Hz 输出目标。
 - 当前 controller 使用 position，解析缓存 velocity / acceleration。
-- 输出到 hardware 的 velocity command 第一版固定为 `0.0`；后续会把 position 差分和 velocity feed-forward 从 hardware 迁到 controller。
+- 输出到 hardware 的 velocity command 来自 MoveIt Servo `JointTrajectory.velocities`；若使用 `Float64MultiArray` position-only 路线则输出 `0.0`。
 - acceleration 为后续加速度前馈和完整逆动力学控制预留。
 - 如果改回 `std_msgs/Float64MultiArray`，输出 topic 应改为 `/easyarm_servo_controller/joint_positions`，并且必须关闭 velocity / acceleration；当前兼容路径只支持 position-only。
 

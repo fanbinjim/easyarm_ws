@@ -13,8 +13,8 @@ struct MotionContext
   std::string planning_group{"arm"};
   std::string ee_link{"Link6"};
   std::string planning_frame{"base_link"};
-  double default_velocity_scale{0.2};
-  double default_acceleration_scale{0.2};
+  double default_velocity_scale{1.0};
+  double default_acceleration_scale{1.0};
   std::string movej_planner_id{"PTP"};
   std::string movel_planner_id{"LIN"};
   std::string planning_pipeline_id{"pilz_industrial_motion_planner"};

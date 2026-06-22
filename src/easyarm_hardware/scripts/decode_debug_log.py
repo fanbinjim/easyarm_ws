@@ -21,6 +21,7 @@ JOINT_SIZE = struct.calcsize(JOINT_FORMAT)
 
 DEFAULT_LOG_GLOB = "/dev/shm/easyarm_log_*.bin"
 DEFAULT_OUTPUT_ROOT = Path("debug/plot")
+MIN_Y_MAJOR_TICK_SPACING = 0.01
 
 JOINT_FIELDS = [
     "state_position",
@@ -307,6 +308,26 @@ def draw_spec(ax, time_s: list[float], rows: list[dict], title: str, ylabel: str
     ax.legend()
 
 
+def enforce_min_y_major_tick_spacing(ax, min_spacing: float = MIN_Y_MAJOR_TICK_SPACING) -> None:
+    from matplotlib.ticker import MultipleLocator
+
+    ticks = ax.get_yticks()
+    spacings = [
+        high - low
+        for low, high in zip(ticks, ticks[1:])
+        if high > low
+    ]
+    if spacings and min(spacings) >= min_spacing:
+        return
+
+    y_min, y_max = ax.get_ylim()
+    y_center = 0.5 * (y_min + y_max)
+    min_span = min_spacing * 2.0
+    if y_max - y_min < min_span:
+        ax.set_ylim(y_center - 0.5 * min_span, y_center + 0.5 * min_span)
+    ax.yaxis.set_major_locator(MultipleLocator(min_spacing))
+
+
 def filter_plot_rows(
     rows: list[dict],
     start_s: float | None,
@@ -372,6 +393,9 @@ def plot_rows(
     if xlim_end > xlim_start:
         for ax in axes.flat:
             ax.set_xlim(xlim_start, xlim_end)
+
+    for ax in axes.flat:
+        enforce_min_y_major_tick_spacing(ax)
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)

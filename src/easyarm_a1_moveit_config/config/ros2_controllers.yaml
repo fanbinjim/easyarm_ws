@@ -50,5 +50,5 @@ easyarm_servo_controller:
     command_timeout_sec: 0.2
     enable_gravity_compensation: true
     gravity_compensation_scale: 1.0
-    kp: 80.0
-    kd: 5.0
+    kp: 120.0
+    kd: 3.0

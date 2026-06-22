@@ -714,60 +714,77 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
       continue;
     }
 
+    const bool uses_controller_full_command = full_command_source_ == FullCommandSource::Controller;
+
     // 先在关节空间做机械臂 joint limit 保护，电机侧限幅只作为协议范围保护。
     const double target_position = clamp_joint_position(i, hw_commands_positions_[i]);
 
     // 对目标位置做一阶平滑，避免上层 position command 突变直接进入电机控制。
     smoothed_positions_[i] = smoothing_alpha_ * target_position + (1.0 - smoothing_alpha_) * smoothed_positions_[i];
 
-    // 由平滑后的位置差分估计 velocity feed-forward。
-    double smoothed_velocity = (smoothed_positions_[i] - last_cmd_positions_[i]) / dt;
+    // 保持差分路径的历史位置同步，避免退出 SERVO 后切回 hardware 速度估计时产生尖峰。
+    const double position_delta_velocity = (smoothed_positions_[i] - last_cmd_positions_[i]) / dt;
     last_cmd_positions_[i] = smoothed_positions_[i];
 
-    // 限制相邻周期速度变化量，相当于给速度前馈加加速度约束。
-    const double max_velocity_change = max_acceleration_ * dt;
-    const double acceleration_delta = smoothed_velocity - smoothed_velocities_[i];
-    if (std::abs(acceleration_delta) > max_velocity_change) {
-      smoothed_velocity = smoothed_velocities_[i] + max_velocity_change * (acceleration_delta > 0.0 ? 1.0 : -1.0);
-    }
-
-    // 限制速度前馈幅值，并记录当前估计加速度。
-    smoothed_velocity = std::clamp(smoothed_velocity, -max_velocity_, max_velocity_);
-    smoothed_accelerations_[i] = (smoothed_velocity - smoothed_velocities_[i]) / dt;
-    smoothed_velocities_[i] = smoothed_velocity;
-
-    // 4 点滑动平均，进一步降低速度前馈的高频抖动。
-    vel_ma_buffer_[i][vel_ma_idx_[i]] = smoothed_velocity;
-    vel_ma_idx_[i] = (vel_ma_idx_[i] + 1) % 4;
-
-    double ma_velocity = 0.0;
-    for (double value : vel_ma_buffer_[i]) {
-      ma_velocity += value;
-    }
-    ma_velocity *= 0.25;
-
-    double filtered_velocity = std::clamp(ma_velocity, -velocity_limit_, velocity_limit_);
-
-    // 低速死区：接近静止时清零速度前馈，避免微小命令造成电机抖动。
-    const bool stopped = std::abs(filtered_velocity) < 0.02;
-    if (stopped) {
-      if (++velocity_settle_counter_[i] >= 1) {
-        filtered_cmd_velocities_[i] = 0.0;
-        velocity_ff_stage2_[i] = 0.0;
-        filtered_velocity = 0.0;
-      }
-    } else {
+    double velocity_feedforward = 0.0;
+    if (uses_controller_full_command) {
+      // SERVO 链路直接使用 controller 输出的 dq，只保留硬件侧最终速度限幅。
+      velocity_feedforward = std::clamp(hw_commands_velocities_[i], -max_velocity_, max_velocity_);
+      velocity_feedforward = std::clamp(velocity_feedforward, -velocity_limit_, velocity_limit_);
+      smoothed_accelerations_[i] = (velocity_feedforward - smoothed_velocities_[i]) / dt;
+      smoothed_velocities_[i] = velocity_feedforward;
+      filtered_cmd_velocities_[i] = velocity_feedforward;
+      velocity_ff_stage2_[i] = velocity_feedforward;
       velocity_settle_counter_[i] = 0;
-    }
+    } else {
+      // 由平滑后的位置差分估计 velocity feed-forward。
+      double smoothed_velocity = position_delta_velocity;
 
-    // 两级一阶低通，输出最终发送给电机的 velocity feed-forward。
-    constexpr double alpha = 0.18;
-    filtered_cmd_velocities_[i] = alpha * filtered_velocity + (1.0 - alpha) * filtered_cmd_velocities_[i];
-    velocity_ff_stage2_[i] = alpha * filtered_cmd_velocities_[i] + (1.0 - alpha) * velocity_ff_stage2_[i];
+      // 限制相邻周期速度变化量，相当于给速度前馈加加速度约束。
+      const double max_velocity_change = max_acceleration_ * dt;
+      const double acceleration_delta = smoothed_velocity - smoothed_velocities_[i];
+      if (std::abs(acceleration_delta) > max_velocity_change) {
+        smoothed_velocity = smoothed_velocities_[i] + max_velocity_change * (acceleration_delta > 0.0 ? 1.0 : -1.0);
+      }
+
+      // 限制速度前馈幅值，并记录当前估计加速度。
+      smoothed_velocity = std::clamp(smoothed_velocity, -max_velocity_, max_velocity_);
+      smoothed_accelerations_[i] = (smoothed_velocity - smoothed_velocities_[i]) / dt;
+      smoothed_velocities_[i] = smoothed_velocity;
+
+      // 4 点滑动平均，进一步降低速度前馈的高频抖动。
+      vel_ma_buffer_[i][vel_ma_idx_[i]] = smoothed_velocity;
+      vel_ma_idx_[i] = (vel_ma_idx_[i] + 1) % 4;
+
+      double ma_velocity = 0.0;
+      for (double value : vel_ma_buffer_[i]) {
+        ma_velocity += value;
+      }
+      ma_velocity *= 0.25;
+
+      double filtered_velocity = std::clamp(ma_velocity, -velocity_limit_, velocity_limit_);
+
+      // 低速死区：接近静止时清零速度前馈，避免微小命令造成电机抖动。
+      const bool stopped = std::abs(filtered_velocity) < 0.02;
+      if (stopped) {
+        if (++velocity_settle_counter_[i] >= 1) {
+          filtered_cmd_velocities_[i] = 0.0;
+          velocity_ff_stage2_[i] = 0.0;
+          filtered_velocity = 0.0;
+        }
+      } else {
+        velocity_settle_counter_[i] = 0;
+      }
+
+      // 两级一阶低通，输出最终发送给电机的 velocity feed-forward。
+      constexpr double alpha = 0.18;
+      filtered_cmd_velocities_[i] = alpha * filtered_velocity + (1.0 - alpha) * filtered_cmd_velocities_[i];
+      velocity_ff_stage2_[i] = alpha * filtered_cmd_velocities_[i] + (1.0 - alpha) * velocity_ff_stage2_[i];
+      velocity_feedforward = velocity_ff_stage2_[i];
+    }
 
     const double motor_position = smoothed_positions_[i] * config.direction + config.position_offset;
-    const double motor_velocity = velocity_ff_stage2_[i] * config.direction;
-    const bool uses_controller_full_command = full_command_source_ == FullCommandSource::Controller;
+    const double motor_velocity = velocity_feedforward * config.direction;
     const double joint_torque =
       uses_controller_full_command ?
       hw_commands_efforts_[i] :
@@ -781,6 +798,16 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
     const double command_torque = motor_torque;
 
     const double clamped_motor_position = std::clamp(motor_position, motor_params.p_min, motor_params.p_max);
+
+    if (uses_controller_full_command && i == 0 && write_counter % 200 == 0) {
+      RCLCPP_INFO(
+        logger_,
+        "Controller dq command joint=%s input=%.6f limited=%.6f motor=%.6f",
+        config.name.c_str(),
+        hw_commands_velocities_[i],
+        velocity_feedforward,
+        command_velocity);
+    }
 
     // if (write_counter % 200 == 0) {
     //   RCLCPP_INFO(

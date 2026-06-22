@@ -53,6 +53,7 @@ private:
 
   mutable std::mutex mutex_;
   bool servo_runtime_active_{false};
+  bool servo_runtime_exiting_{false};
   std::string active_task_;
   rclcpp::Time last_command_time_;
   double servo_command_timeout_sec_{0.2};

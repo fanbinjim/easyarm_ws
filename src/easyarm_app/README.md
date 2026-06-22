@@ -169,7 +169,19 @@ q w e r t y  -> Joint1..Joint6 负方向速度
 Esc          -> 退出并发送零速度
 ```
 
-按住按键时速度会缓慢增加；松开后速度会快速回零，但不会瞬间归零。
+`speedj_teleop` 和 `speedl_teleop` 使用 Linux input event 读取真实按下/松开事件，不依赖终端字符连发。按住按键时速度会缓慢增加；松开后速度会快速回零，但不会瞬间归零。
+
+如果系统没有安装依赖：
+
+```bash
+sudo apt install python3-evdev
+```
+
+如果没有 `/dev/input/event*` 读取权限，需要把当前用户加入 `input` 组，或用具备权限的方式运行。自动选择键盘失败时可以手动指定设备：
+
+```bash
+EASYARM_KEYBOARD_DEVICE=/dev/input/eventX ros2 run easyarm_app easyarm_shell
+```
 
 ## 键盘 SpeedL 模式
 

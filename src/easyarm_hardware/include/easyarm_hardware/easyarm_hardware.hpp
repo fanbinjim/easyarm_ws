@@ -156,7 +156,7 @@ private:
 
   double position_kp_{100.0};
   double position_kd_{4.0};
-  double velocity_limit_{10.0};
+  double velocity_limit_{30.0};
   double smoothing_alpha_{0.8};
   double max_velocity_{2.0};
   double max_acceleration_{8.0};

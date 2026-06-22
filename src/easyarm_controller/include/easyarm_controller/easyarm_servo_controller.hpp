@@ -21,7 +21,8 @@ namespace easyarm_controller
  *
  * 该控制器 claim position/velocity/kp/kd/effort command interface。Float64MultiArray
  * 输入被解释为 position-only；JointTrajectory 输入会解析 position、velocity
- * 和 acceleration。当前 velocity 输出先固定为 0，effort 由 gravity(q) 计算得到。
+ * 和 acceleration。JointTrajectory 带 velocity 时会直接写入 velocity command，
+ * effort 由 gravity(q) 计算得到。
  */
 class EasyArmServoController : public controller_interface::ControllerInterface
 {

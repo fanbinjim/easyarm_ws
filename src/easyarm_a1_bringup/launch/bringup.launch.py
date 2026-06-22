@@ -34,7 +34,7 @@ def generate_launch_description():
         [
             FindPackageShare("easyarm_description"),
             "urdf",
-            "easyarm_a1_h0616.urdf",
+            "easyarm_a1_h0617.urdf.xacro",
         ]
     )
 
@@ -232,7 +232,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "easyarm_urdf_path",
                 default_value=default_urdf_path,
-                description="URDF file used by easyarm_a1.urdf.xacro and easyarm_hardware.",
+                description="URDF/Xacro file used by easyarm_a1.urdf.xacro and easyarm_hardware.",
             ),
             DeclareLaunchArgument(
                 "publish_frequency",

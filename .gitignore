@@ -6,5 +6,6 @@ data/
 .codex/
 ref/
 debug/plot/
+debug/rosbag/
 __pycache__/
 *.pyc

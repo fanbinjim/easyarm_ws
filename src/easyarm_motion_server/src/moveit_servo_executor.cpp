@@ -110,17 +110,25 @@ bool MoveItServoExecutor::exitServoRuntime(std::string & message)
       message = "SERVO runtime is not active";
       return true;
     }
+    if (servo_runtime_exiting_) {
+      message = "SERVO runtime is already exiting";
+      return true;
+    }
+    servo_runtime_exiting_ = true;
   }
 
   publishZeroCommands();
 
   if (!switchControllers(trajectory_controller_name_, servo_controller_name_, message)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    servo_runtime_exiting_ = false;
     return false;
   }
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
     servo_runtime_active_ = false;
+    servo_runtime_exiting_ = false;
     active_task_.clear();
   }
 
@@ -155,7 +163,7 @@ void MoveItServoExecutor::update()
 {
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!servo_runtime_active_ || !hasTimedOut(node_.get_clock()->now())) {
+    if (!servo_runtime_active_ || servo_runtime_exiting_ || !hasTimedOut(node_.get_clock()->now())) {
       return;
     }
   }

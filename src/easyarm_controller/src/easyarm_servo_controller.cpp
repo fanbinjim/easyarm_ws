@@ -180,11 +180,11 @@ controller_interface::return_type EasyArmServoController::update(
   const auto command = command_buffer_.readFromRT();
 
   if (command && command->has_command && !commandTimedOut(time, *command)) {
-    // 第一版将 MoveIt Servo 输出的关节 position 作为目标 setpoint 直通保存。
+    // 将 MoveIt Servo 输出的关节 position 作为目标 setpoint 直通保存。
     for (size_t i = 0; i < hold_commands_.size(); ++i) {
       hold_commands_[i].position = command->positions[i];
-      // velocity 接口先占位输出 0；当前电机速度前馈仍由 hardware 基于 position 差分生成。
-      hold_commands_[i].velocity = 0.0;
+      // JointTrajectory 输入带 velocity 时，将 MoveIt Servo 计算出的 dq 继续传给 hardware。
+      hold_commands_[i].velocity = command->has_velocities ? command->velocities[i] : 0.0;
       hold_commands_[i].kp = kp_;
       hold_commands_[i].kd = kd_;
     }
@@ -219,7 +219,7 @@ controller_interface::return_type EasyArmServoController::update(
     //   hold_commands_.size() > 4 ? hold_commands_[4].effort : 0.0,
     //   hold_commands_.size() > 5 ? hold_commands_[5].effort : 0.0);
 
-    // velocity/acceleration 是上游轨迹输入；当前只缓存，后续用于计算完整动力学 effort。
+    // velocity 已经写入 command interface；acceleration 先缓存，后续用于完整动力学 effort。
     has_last_velocities_ = command->has_velocities;
     has_last_accelerations_ = command->has_accelerations;
     if (has_last_velocities_) {
@@ -227,6 +227,10 @@ controller_interface::return_type EasyArmServoController::update(
     }
     if (has_last_accelerations_) {
       last_accelerations_ = command->accelerations;
+    }
+  } else {
+    for (auto & hold_command : hold_commands_) {
+      hold_command.velocity = 0.0;
     }
   }
 

@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="easyarm_a1">
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
-    <xacro:arg name="easyarm_urdf_path" default="$(find easyarm_description)/urdf/easyarm_a1_h0616.urdf" />
+    <xacro:arg name="easyarm_urdf_path" default="$(find easyarm_description)/urdf/easyarm_a1_h0617.urdf.xacro" />
     <xacro:arg name="debug_enable" default="false" />
     <xacro:arg name="use_mock_hardware" default="false" />
 

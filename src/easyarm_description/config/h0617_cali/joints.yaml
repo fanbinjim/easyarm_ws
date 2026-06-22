@@ -10,7 +10,7 @@ Joint1:
     lower: -3.14
     upper: 3.14
     effort: 6.0
-    velocity: 10.0
+    velocity: 32.97
 Joint2:
   type: revolute
   parent: Link1
@@ -23,7 +23,7 @@ Joint2:
     lower: -3.14
     upper: 3.14
     effort: 6.0
-    velocity: 10.0
+    velocity: 32.97
 Joint3:
   type: revolute
   parent: Link2
@@ -36,7 +36,7 @@ Joint3:
     lower: -3.14
     upper: 3.14
     effort: 6.0
-    velocity: 10.0
+    velocity: 32.97
 Joint4:
   type: revolute
   parent: Link3
@@ -49,7 +49,7 @@ Joint4:
     lower: -3.14
     upper: 3.14
     effort: 6.0
-    velocity: 10.0
+    velocity: 32.97
 Joint5:
   type: revolute
   parent: Link4
@@ -62,7 +62,7 @@ Joint5:
     lower: -3.14
     upper: 3.14
     effort: 6.0
-    velocity: 10.0
+    velocity: 32.97
 Joint6:
   type: revolute
   parent: Link5
@@ -75,4 +75,4 @@ Joint6:
     lower: -3.14
     upper: 3.14
     effort: 6.0
-    velocity: 10.0
+    velocity: 50.24
