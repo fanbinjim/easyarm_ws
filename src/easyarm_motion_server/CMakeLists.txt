@@ -12,6 +12,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
+find_package(moveit_ros_planning REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
@@ -27,6 +28,7 @@ add_executable(easyarm_motion_server
   src/hardware_mode_client.cpp
   src/hold_trajectory_sender.cpp
   src/moveit_servo_runtime.cpp
+  src/position_servo_executor.cpp
   src/moveit_motion_executor.cpp)
 target_include_directories(
   easyarm_motion_server
@@ -40,6 +42,7 @@ ament_target_dependencies(
   geometry_msgs
   sensor_msgs
   moveit_ros_planning_interface
+  moveit_ros_planning
   control_msgs
   trajectory_msgs
   controller_manager_msgs

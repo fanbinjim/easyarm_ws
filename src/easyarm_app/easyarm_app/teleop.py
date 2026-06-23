@@ -1,4 +1,5 @@
 import glob
+import math
 import os
 import select
 import time
@@ -119,17 +120,26 @@ class EvdevKeyboardInput:
         )
 
 
-class SpeedJTeleopController:
+class KeyboardTeleopController:
+    def __init__(self, node):
+        self.node = node
+
+    def _drain_terminal_input(self, terminal) -> None:
+        while terminal.read_key() is not None:
+            pass
+
+
+class SpeedJTeleopController(KeyboardTeleopController):
     POSITIVE_KEYS = "123456"
     NEGATIVE_KEYS = "qwerty"
 
     def __init__(self, node):
-        self.node = node
+        super().__init__(node)
         self.rate_hz = 50.0
         self.dt = 1.0 / self.rate_hz
-        self.max_speed = 30.0
-        self.accel = 100.0
-        self.decel = 120.0
+        self.max_speed = 5.0
+        self.accel = 10.0
+        self.decel = 15.0
         self.velocities = [0.0] * 6
         self.target_signs = [0] * 6
 
@@ -161,10 +171,6 @@ class SpeedJTeleopController:
             self._halt()
             print()
         return 0
-
-    def _drain_terminal_input(self, terminal) -> None:
-        while terminal.read_key() is not None:
-            pass
 
     def _handle_key_event(self, key, is_pressed: bool) -> bool:
         if key == "\x1b":
@@ -198,7 +204,7 @@ class SpeedJTeleopController:
             time.sleep(interval)
 
 
-class SpeedLTeleopController:
+class SpeedLTeleopController(KeyboardTeleopController):
     KEY_BINDINGS = {
         "w": (1, 1),       # y+
         "s": (1, -1),      # y-
@@ -215,15 +221,15 @@ class SpeedLTeleopController:
     }
 
     def __init__(self, node):
-        self.node = node
+        super().__init__(node)
         self.rate_hz = 50.0
         self.dt = 1.0 / self.rate_hz
-        self.max_linear_speed = 0.2
-        self.max_angular_speed = 0.3
-        self.linear_accel = 0.30
-        self.linear_decel = 0.40
-        self.angular_accel = 0.80
-        self.angular_decel = 1.50
+        self.max_linear_speed = 0.3
+        self.max_angular_speed = 3.0
+        self.linear_accel = 1.0
+        self.linear_decel = 2.0
+        self.angular_accel = 10.0
+        self.angular_decel = 15.0
         self.twist = [0.0] * 6
         self.target_signs = [0] * 6
 
@@ -257,10 +263,6 @@ class SpeedLTeleopController:
             self._halt()
             print()
         return 0
-
-    def _drain_terminal_input(self, terminal) -> None:
-        while terminal.read_key() is not None:
-            pass
 
     def _handle_key_event(self, key, is_pressed: bool) -> bool:
         if key == "\x1b":
@@ -304,3 +306,180 @@ class SpeedLTeleopController:
         for _ in range(4):
             self.node.speedl_pub.publish(self.node._make_twist([0.0] * 6, "base_link"))
             time.sleep(interval)
+
+
+class ServoJTeleopController(SpeedJTeleopController):
+    def __init__(self, node):
+        super().__init__(node)
+        self.max_speed = 3.0
+        self.accel = 10.0
+        self.decel = 15.0
+        self.target_positions = None
+
+    def run(self) -> int:
+        if not self._initialize_target_positions():
+            return 1
+        self.node.get_logger().info(
+            "ServoJ teleop mode: 1-6 positive, qwerty negative, Esc exits.")
+        self.node.get_logger().info(
+            f"Hold a key to ramp joint target speed up to {self.max_speed:.2f} rad/s; release ramps to zero.")
+
+        try:
+            with RawTerminal() as terminal, EvdevKeyboardInput(self.node.get_logger()) as keyboard:
+                while rclpy.ok():
+                    start = time.monotonic()
+                    self._drain_terminal_input(terminal)
+                    for key, is_pressed in keyboard.read_events():
+                        if self._handle_key_event(key, is_pressed):
+                            return 0
+                    self._update_velocities(start)
+                    self._integrate_positions()
+                    self.node.servoj_pub.publish(self.node._make_servoj_target(self.target_positions))
+                    sleep_time = self.dt - (time.monotonic() - start)
+                    if sleep_time > 0.0:
+                        time.sleep(sleep_time)
+        except RuntimeError as error:
+            self.node.get_logger().error(str(error))
+            return 1
+        except KeyboardInterrupt:
+            print()
+        finally:
+            self._halt()
+            print()
+        return 0
+
+    def _initialize_target_positions(self) -> bool:
+        positions = self.node.get_current_joint_positions(5.0)
+        if positions is None:
+            return False
+        self.target_positions = list(positions)
+        return True
+
+    def _integrate_positions(self) -> None:
+        for index, velocity in enumerate(self.velocities):
+            self.target_positions[index] += velocity * self.dt
+
+    def _halt(self) -> None:
+        interval = self.dt
+        while any(abs(value) > 1e-3 for value in self.velocities):
+            self.velocities = [_approach(value, 0.0, self.decel * interval) for value in self.velocities]
+            self._integrate_positions()
+            self.node.servoj_pub.publish(self.node._make_servoj_target(self.target_positions))
+            time.sleep(interval)
+        for _ in range(4):
+            self.node.servoj_pub.publish(self.node._make_servoj_target(self.target_positions))
+            time.sleep(interval)
+
+
+class ServoLTeleopController(SpeedLTeleopController):
+    def __init__(self, node):
+        super().__init__(node)
+        self.target_pose = None
+
+    def run(self) -> int:
+        if not self._initialize_target_pose():
+            return 1
+        self.node.get_logger().info(
+            "ServoL teleop mode: wasd/space/c translate, q/e/ikjl rotate, Esc exits.")
+        self.node.get_logger().info(
+            "w y+, s y-, a x-, d x+, space z+, c z-.")
+        self.node.get_logger().info(
+            "q -wy, e +wy, i/k pitch around x, j/l yaw around z.")
+
+        try:
+            with RawTerminal() as terminal, EvdevKeyboardInput(self.node.get_logger()) as keyboard:
+                while rclpy.ok():
+                    start = time.monotonic()
+                    self._drain_terminal_input(terminal)
+                    for key, is_pressed in keyboard.read_events():
+                        if self._handle_key_event(key, is_pressed):
+                            return 0
+                    self._update_twist(start)
+                    self._integrate_pose()
+                    self.node.servol_pub.publish(self.node._make_servol_pose(self.target_pose, "base_link"))
+                    sleep_time = self.dt - (time.monotonic() - start)
+                    if sleep_time > 0.0:
+                        time.sleep(sleep_time)
+        except RuntimeError as error:
+            self.node.get_logger().error(str(error))
+            return 1
+        except KeyboardInterrupt:
+            print()
+        finally:
+            self._halt()
+            print()
+        return 0
+
+    def _initialize_target_pose(self) -> bool:
+        pose = self.node.get_current_pose(5.0)
+        if pose is None:
+            return False
+        self.target_pose = {
+            "position": [
+                pose.pose.position.x,
+                pose.pose.position.y,
+                pose.pose.position.z,
+            ],
+            "orientation": [
+                pose.pose.orientation.x,
+                pose.pose.orientation.y,
+                pose.pose.orientation.z,
+                pose.pose.orientation.w,
+            ],
+        }
+        return True
+
+    def _integrate_pose(self) -> None:
+        for index in range(3):
+            self.target_pose["position"][index] += self.twist[index] * self.dt
+        delta_quaternion = _quaternion_from_angular_velocity(self.twist[3:6], self.dt)
+        self.target_pose["orientation"] = _quaternion_multiply(
+            delta_quaternion,
+            self.target_pose["orientation"])
+
+    def _halt(self) -> None:
+        interval = self.dt
+        while any(abs(value) > 1e-4 for value in self.twist):
+            next_twist = []
+            for index, value in enumerate(self.twist):
+                decel = self.linear_decel if index < 3 else self.angular_decel
+                next_twist.append(_approach(value, 0.0, decel * interval))
+            self.twist = next_twist
+            self._integrate_pose()
+            self.node.servol_pub.publish(self.node._make_servol_pose(self.target_pose, "base_link"))
+            time.sleep(interval)
+        for _ in range(4):
+            self.node.servol_pub.publish(self.node._make_servol_pose(self.target_pose, "base_link"))
+            time.sleep(interval)
+
+
+def _quaternion_from_angular_velocity(angular_velocity, dt):
+    wx, wy, wz = angular_velocity
+    angle = math.sqrt(wx * wx + wy * wy + wz * wz) * dt
+    if angle <= 1e-12:
+        return [0.0, 0.0, 0.0, 1.0]
+    scale = math.sin(angle * 0.5) / (angle / dt)
+    return _normalize_quaternion([
+        wx * scale,
+        wy * scale,
+        wz * scale,
+        math.cos(angle * 0.5),
+    ])
+
+
+def _quaternion_multiply(left, right):
+    lx, ly, lz, lw = left
+    rx, ry, rz, rw = right
+    return _normalize_quaternion([
+        lw * rx + lx * rw + ly * rz - lz * ry,
+        lw * ry - lx * rz + ly * rw + lz * rx,
+        lw * rz + lx * ry - ly * rx + lz * rw,
+        lw * rw - lx * rx - ly * ry - lz * rz,
+    ])
+
+
+def _normalize_quaternion(quaternion):
+    norm = math.sqrt(sum(value * value for value in quaternion))
+    if norm <= 1e-12:
+        return [0.0, 0.0, 0.0, 1.0]
+    return [value / norm for value in quaternion]

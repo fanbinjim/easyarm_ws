@@ -11,6 +11,10 @@ def build_parser() -> argparse.ArgumentParser:
             "  movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0\n"
             "  speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50\n"
             "  speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50\n"
+            "  servoj 0 0.02 0 0 0 0 --duration 1.0 --rate 50\n"
+            "  servoj_teleop    # in easyarm_shell: keyboard ServoJ target mode\n"
+            "  servol 0.25 0.0 0.25 0.0 0.0 0.0 1.0 --duration 1.0 --rate 50\n"
+            "  servol_teleop    # in easyarm_shell: keyboard ServoL target mode\n"
             "  set-mode DRAG\n"
             "  set-mode POSITION\n"
             "  speedl_teleop    # in easyarm_shell: keyboard Cartesian teleop mode\n"
@@ -99,6 +103,33 @@ def build_parser() -> argparse.ArgumentParser:
     speedl.add_argument("--rate", type=float, default=50.0)
     speedl.add_argument("--halt-count", type=int, default=4)
 
+    servoj = subparsers.add_parser(
+        "servoj",
+        help="Publish ServoJ joint position targets",
+        epilog="example:\n  servoj 0 0.02 0 0 0 0 --duration 1.0 --rate 50",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    servoj.add_argument("joints", nargs=6, type=float, metavar="J")
+    servoj.add_argument("--duration", type=float, default=1.0)
+    servoj.add_argument("--rate", type=float, default=50.0)
+
+    servol = subparsers.add_parser(
+        "servol",
+        help="Publish ServoL pose targets",
+        epilog="example:\n  servol 0.25 0.0 0.25 0.0 0.0 0.0 1.0 --duration 1.0 --rate 50",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    servol.add_argument("x", type=float)
+    servol.add_argument("y", type=float)
+    servol.add_argument("z", type=float)
+    servol.add_argument("qx", type=float)
+    servol.add_argument("qy", type=float)
+    servol.add_argument("qz", type=float)
+    servol.add_argument("qw", type=float)
+    servol.add_argument("--frame-id", default="base_link")
+    servol.add_argument("--duration", type=float, default=1.0)
+    servol.add_argument("--rate", type=float, default=50.0)
+
     subparsers.add_parser(
         "speedj_teleop",
         help="Run keyboard SpeedJ teleoperation in easyarm_shell",
@@ -107,6 +138,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "speedl_teleop",
         help="Run keyboard SpeedL teleoperation in easyarm_shell",
+    )
+
+    subparsers.add_parser(
+        "servoj_teleop",
+        help="Run keyboard ServoJ target teleoperation in easyarm_shell",
+    )
+
+    subparsers.add_parser(
+        "servol_teleop",
+        help="Run keyboard ServoL target teleoperation in easyarm_shell",
     )
 
     safe_shutdown = subparsers.add_parser("safe_shutdown", help="Run safe shutdown and exit shell")

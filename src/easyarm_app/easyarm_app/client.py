@@ -7,8 +7,9 @@ from easyarm_interfaces.srv import GetJoints, GetPose, GetState, SetMode, Stop
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
-from .teleop import SpeedJTeleopController, SpeedLTeleopController
+from .teleop import ServoJTeleopController, ServoLTeleopController, SpeedJTeleopController, SpeedLTeleopController
 from .utils import _spin_until_complete, _value_or_nan
 
 
@@ -24,6 +25,8 @@ class EasyArmCli(Node):
         self.get_pose_client = self.create_client(GetPose, "/easyarm/get_pose")
         self.speedj_pub = self.create_publisher(JointJog, "/easyarm/speedj_cmd", 10)
         self.speedl_pub = self.create_publisher(TwistStamped, "/easyarm/speedl_cmd", 10)
+        self.servoj_pub = self.create_publisher(JointTrajectory, "/easyarm/servoj_cmd", 10)
+        self.servol_pub = self.create_publisher(PoseStamped, "/easyarm/servol_cmd", 10)
 
     def movej(self, args) -> int:
         if not self.movej_client.wait_for_server(timeout_sec=args.timeout):
@@ -211,6 +214,43 @@ class EasyArmCli(Node):
         self._log_info(f"published speedl commands: {count}")
         return 0
 
+    def servoj(self, args) -> int:
+        if not self._require_position_mode(args.timeout):
+            return 1
+        joints = [float(value) for value in args.joints]
+        if not self._validate_stream_args(args.rate, args.duration):
+            return 1
+        if not self._wait_for_subscribers(self.servoj_pub, "/easyarm/servoj_cmd", args.timeout):
+            return 1
+
+        interval = 1.0 / float(args.rate)
+        count = self._publish_for_duration(
+            interval,
+            float(args.duration),
+            lambda: self._make_servoj_target(joints),
+            self.servoj_pub.publish,
+        )
+        self._log_info(f"published servoj targets: {count}")
+        return 0
+
+    def servol(self, args) -> int:
+        if not self._require_position_mode(args.timeout):
+            return 1
+        if not self._validate_stream_args(args.rate, args.duration):
+            return 1
+        if not self._wait_for_subscribers(self.servol_pub, "/easyarm/servol_cmd", args.timeout):
+            return 1
+
+        interval = 1.0 / float(args.rate)
+        count = self._publish_for_duration(
+            interval,
+            float(args.duration),
+            lambda: self._make_servol_target(args),
+            self.servol_pub.publish,
+        )
+        self._log_info(f"published servol targets: {count}")
+        return 0
+
     def _send_action_goal(self, client, goal, timeout: float) -> int:
         goal_future = client.send_goal_async(goal)
         try:
@@ -335,6 +375,42 @@ class EasyArmCli(Node):
         message.twist.angular.z = values[5]
         return message
 
+    def _make_servoj_target(self, joints) -> JointTrajectory:
+        message = JointTrajectory()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = "base_link"
+        message.joint_names = [f"Joint{index}" for index in range(1, 7)]
+        point = JointTrajectoryPoint()
+        point.positions = list(joints)
+        message.points = [point]
+        return message
+
+    def _make_servol_target(self, args) -> PoseStamped:
+        message = PoseStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = args.frame_id
+        message.pose.position.x = float(args.x)
+        message.pose.position.y = float(args.y)
+        message.pose.position.z = float(args.z)
+        message.pose.orientation.x = float(args.qx)
+        message.pose.orientation.y = float(args.qy)
+        message.pose.orientation.z = float(args.qz)
+        message.pose.orientation.w = float(args.qw)
+        return message
+
+    def _make_servol_pose(self, target_pose, frame_id: str) -> PoseStamped:
+        message = PoseStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = frame_id
+        message.pose.position.x = float(target_pose["position"][0])
+        message.pose.position.y = float(target_pose["position"][1])
+        message.pose.position.z = float(target_pose["position"][2])
+        message.pose.orientation.x = float(target_pose["orientation"][0])
+        message.pose.orientation.y = float(target_pose["orientation"][1])
+        message.pose.orientation.z = float(target_pose["orientation"][2])
+        message.pose.orientation.w = float(target_pose["orientation"][3])
+        return message
+
     def _publish_halt_joint_jog(self, count: int, interval: float) -> None:
         zeros = [0.0] * 6
         for _ in range(max(0, int(count))):
@@ -364,3 +440,61 @@ class EasyArmCli(Node):
 
         controller = SpeedLTeleopController(self)
         return controller.run()
+
+    def run_servoj_teleop(self) -> int:
+        if not self._require_position_mode(5.0):
+            return 1
+        if not self._wait_for_subscribers(self.servoj_pub, "/easyarm/servoj_cmd", 5.0):
+            return 1
+
+        controller = ServoJTeleopController(self)
+        return controller.run()
+
+    def run_servol_teleop(self) -> int:
+        if not self._require_position_mode(5.0):
+            return 1
+        if not self._wait_for_subscribers(self.servol_pub, "/easyarm/servol_cmd", 5.0):
+            return 1
+
+        controller = ServoLTeleopController(self)
+        return controller.run()
+
+    def get_current_joint_positions(self, timeout: float):
+        if not self.get_joints_client.wait_for_service(timeout_sec=timeout):
+            self.get_logger().error("/easyarm/get_joints service not available")
+            return None
+        future = self.get_joints_client.call_async(GetJoints.Request())
+        if not _spin_until_complete(self, future, timeout):
+            self.get_logger().error("Timeout calling /easyarm/get_joints")
+            return None
+        response = future.result()
+        if response is None or not response.success:
+            message = "" if response is None else response.message
+            self.get_logger().error(f"Failed to get current joints: {message}")
+            return None
+        joint_positions = {
+            name: _value_or_nan(response.positions, index)
+            for index, name in enumerate(response.names)
+        }
+        return [
+            joint_positions.get(f"Joint{index}", float("nan"))
+            for index in range(1, 7)
+        ]
+
+    def get_current_pose(self, timeout: float):
+        if not self.get_pose_client.wait_for_service(timeout_sec=timeout):
+            self.get_logger().error("/easyarm/get_pose service not available")
+            return None
+        request = GetPose.Request()
+        request.target_frame = "base_link"
+        request.source_frame = "Link6"
+        future = self.get_pose_client.call_async(request)
+        if not _spin_until_complete(self, future, timeout):
+            self.get_logger().error("Timeout calling /easyarm/get_pose")
+            return None
+        response = future.result()
+        if response is None or not response.success:
+            message = "" if response is None else response.message
+            self.get_logger().error(f"Failed to get current pose: {message}")
+            return None
+        return response.pose

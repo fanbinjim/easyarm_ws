@@ -1,5 +1,6 @@
 #include "easyarm_motion_server/motion_server_node.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 
@@ -31,6 +32,8 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
   hold_trajectory_sender_ = std::make_unique<HoldTrajectorySender>(*this, context_, *joint_state_cache_, callback_group_);
   moveit_executor_ = std::make_unique<MoveItMotionExecutor>(*this, context_);
   moveit_servo_runtime_ = std::make_unique<MoveItServoRuntime>(*this, callback_group_);
+  position_servo_executor_ =
+    std::make_unique<PositionServoExecutor>(*this, context_, *joint_state_cache_, *moveit_servo_runtime_);
 
   movej_server_ = rclcpp_action::create_server<MoveJ>(
     this,
@@ -110,8 +113,20 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
     rclcpp::QoS(10),
     std::bind(&MotionServerNode::handleSpeedLCommand, this, std::placeholders::_1));
 
+  servoj_sub_ = create_subscription<trajectory_msgs::msg::JointTrajectory>(
+    "/easyarm/servoj_cmd",
+    rclcpp::QoS(10),
+    std::bind(&MotionServerNode::handleServoJCommand, this, std::placeholders::_1));
+
+  servol_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+    "/easyarm/servol_cmd",
+    rclcpp::QoS(10),
+    std::bind(&MotionServerNode::handleServoLCommand, this, std::placeholders::_1));
+
+  const auto servo_rate_hz = std::max(1.0, get_parameter("position_servo_rate_hz").as_double());
+  const auto servo_timer_period_ms = std::max(1, static_cast<int>(1000.0 / servo_rate_hz));
   servo_timer_ = create_wall_timer(
-    std::chrono::milliseconds(20),
+    std::chrono::milliseconds(servo_timer_period_ms),
     std::bind(&MotionServerNode::handleServoTimer, this),
     callback_group_);
 
@@ -127,6 +142,7 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
 void MotionServerNode::initializeMoveGroup()
 {
   moveit_executor_->initialize(shared_from_this());
+  position_servo_executor_->initialize(shared_from_this());
 }
 
 rclcpp_action::GoalResponse MotionServerNode::handleMoveJGoal(
@@ -383,9 +399,15 @@ void MotionServerNode::handleStop(
 {
   stop_requested_.store(true);
   moveit_executor_->stop();
+  if (position_servo_executor_->isActive()) {
+    position_servo_executor_->stop();
+  }
   if (moveit_servo_runtime_->isActive()) {
     moveit_servo_runtime_->stop();
-    if (!moveit_servo_runtime_->isActive() && activeTaskSnapshot().rfind("Speed", 0) == 0) {
+    const auto active_task = activeTaskSnapshot();
+    if (!moveit_servo_runtime_->isActive() &&
+      (active_task.rfind("Speed", 0) == 0 || active_task.rfind("Servo", 0) == 0))
+    {
       releaseTask();
     }
   }
@@ -469,14 +491,54 @@ void MotionServerNode::handleSpeedLCommand(geometry_msgs::msg::TwistStamped::Sha
   moveit_servo_runtime_->forwardSpeedL(*command);
 }
 
+void MotionServerNode::handleServoJCommand(trajectory_msgs::msg::JointTrajectory::SharedPtr command)
+{
+  std::string message;
+  const bool runtime_was_active = moveit_servo_runtime_->isActive();
+  if (!prepareServoCommand("ServoJ", message)) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Reject ServoJ: %s", message.c_str());
+    return;
+  }
+  if (!position_servo_executor_->acceptServoJTarget(*command, message)) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Reject ServoJ: %s", message.c_str());
+    if (!runtime_was_active && activeTaskSnapshot() == "ServoJ") {
+      position_servo_executor_->stop();
+      moveit_servo_runtime_->stop();
+      releaseTask();
+    }
+  }
+}
+
+void MotionServerNode::handleServoLCommand(geometry_msgs::msg::PoseStamped::SharedPtr command)
+{
+  std::string message;
+  const bool runtime_was_active = moveit_servo_runtime_->isActive();
+  if (!prepareServoCommand("ServoL", message)) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Reject ServoL: %s", message.c_str());
+    return;
+  }
+  if (!position_servo_executor_->acceptServoLTarget(*command, message)) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Reject ServoL: %s", message.c_str());
+    if (!runtime_was_active && activeTaskSnapshot() == "ServoL") {
+      position_servo_executor_->stop();
+      moveit_servo_runtime_->stop();
+      releaseTask();
+    }
+  }
+}
+
 void MotionServerNode::handleServoTimer()
 {
   if (!moveit_servo_runtime_->isActive()) {
     return;
   }
 
+  position_servo_executor_->update();
   moveit_servo_runtime_->update();
-  if (!moveit_servo_runtime_->isActive() && activeTaskSnapshot().rfind("Speed", 0) == 0) {
+  const auto active_task = activeTaskSnapshot();
+  if (!moveit_servo_runtime_->isActive() &&
+    (active_task.rfind("Speed", 0) == 0 || active_task.rfind("Servo", 0) == 0))
+  {
     releaseTask();
   }
 }
@@ -490,6 +552,11 @@ bool MotionServerNode::prepareServoCommand(const std::string & task, std::string
       return false;
     }
     return true;
+  }
+
+  if (task.rfind("Servo", 0) == 0 && !position_servo_executor_->isInitialized()) {
+    message = "PositionServoExecutor is not initialized";
+    return false;
   }
 
   if (!claimTask(task, message)) {

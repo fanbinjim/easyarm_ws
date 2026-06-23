@@ -65,6 +65,12 @@ def shell_main() -> None:
             if line == "speedl_teleop":
                 node.run_speedl_teleop()
                 continue
+            if line == "servoj_teleop":
+                node.run_servoj_teleop()
+                continue
+            if line == "servol_teleop":
+                node.run_servol_teleop()
+                continue
             if line in ("safe_shutdown", "ss") or line.startswith("safe_shutdown ") or line.startswith("ss "):
                 try:
                     extra_args = shlex.split(line)[1:]

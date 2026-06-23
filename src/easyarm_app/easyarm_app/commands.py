@@ -20,10 +20,20 @@ def run_command(node, args) -> int:
         return node.speedj(args)
     if args.command == "speedl":
         return node.speedl(args)
+    if args.command == "servoj":
+        return node.servoj(args)
+    if args.command == "servol":
+        return node.servol(args)
     if args.command == "speedj_teleop":
         node.get_logger().error("speedj_teleop is only supported by easyarm_shell")
         return 1
     if args.command == "speedl_teleop":
         node.get_logger().error("speedl_teleop is only supported by easyarm_shell")
+        return 1
+    if args.command == "servoj_teleop":
+        node.get_logger().error("servoj_teleop is only supported by easyarm_shell")
+        return 1
+    if args.command == "servol_teleop":
+        node.get_logger().error("servol_teleop is only supported by easyarm_shell")
         return 1
     raise RuntimeError(f"unknown command {args.command}")

@@ -15,6 +15,7 @@
 #include <easyarm_interfaces/srv/stop.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
 
 #include "easyarm_motion_server/hardware_mode_client.hpp"
 #include "easyarm_motion_server/joint_state_cache.hpp"
@@ -22,6 +23,7 @@
 #include "easyarm_motion_server/moveit_motion_executor.hpp"
 #include "easyarm_motion_server/moveit_servo_runtime.hpp"
 #include "easyarm_motion_server/hold_trajectory_sender.hpp"
+#include "easyarm_motion_server/position_servo_executor.hpp"
 
 namespace easyarm_motion_server
 {
@@ -81,6 +83,8 @@ private:
     std::shared_ptr<easyarm_interfaces::srv::GetPose::Response> response);
   void handleSpeedJCommand(control_msgs::msg::JointJog::SharedPtr command);
   void handleSpeedLCommand(geometry_msgs::msg::TwistStamped::SharedPtr command);
+  void handleServoJCommand(trajectory_msgs::msg::JointTrajectory::SharedPtr command);
+  void handleServoLCommand(geometry_msgs::msg::PoseStamped::SharedPtr command);
   void handleServoTimer();
   bool prepareServoCommand(const std::string & task, std::string & message);
 
@@ -91,6 +95,7 @@ private:
   std::unique_ptr<HoldTrajectorySender> hold_trajectory_sender_;
   std::unique_ptr<MoveItMotionExecutor> moveit_executor_;
   std::unique_ptr<MoveItServoRuntime> moveit_servo_runtime_;
+  std::unique_ptr<PositionServoExecutor> position_servo_executor_;
 
   std::mutex state_mutex_;
   std::atomic_bool busy_{false};
@@ -107,6 +112,8 @@ private:
   rclcpp::Service<easyarm_interfaces::srv::GetPose>::SharedPtr get_pose_service_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr speedj_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr speedl_sub_;
+  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr servoj_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr servol_sub_;
   rclcpp::TimerBase::SharedPtr servo_timer_;
 };
 
