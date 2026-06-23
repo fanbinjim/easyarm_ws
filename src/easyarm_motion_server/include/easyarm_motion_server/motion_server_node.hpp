@@ -78,6 +78,7 @@ private:
   bool setHardwareMode(const std::string & mode, std::string & message);
   bool enterFreeDriveMode(std::string & message);
   bool exitFreeDriveMode(std::string & message);
+  bool isFreeDriveActive(std::string & message);
   bool switchControllers(
     const std::string & activate,
     const std::string & deactivate,

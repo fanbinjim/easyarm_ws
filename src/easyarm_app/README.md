@@ -149,7 +149,6 @@ ros2 run easyarm_app easyarm movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0 --plan-only
 ```bash
 ros2 run easyarm_app easyarm set-mode POSITION
 ros2 run easyarm_app easyarm set-mode IDLE
-ros2 run easyarm_app easyarm set-mode DRAG
 ros2 run easyarm_app easyarm set-mode FREE_DRIVE
 ```
 

@@ -6,7 +6,7 @@
 
 核心结论：
 
-- `DRAG`、`MOVE`、`SERVO` 应作为平级 robot control mode。
+- `FREE_DRIVE`、`MOVE`、`SERVO` 应作为平级 robot control mode；`DRAG` 仅作为旧 hardware 内部模式名暂时保留。
 - `MoveJ/MoveL` 属于 `MOVE`，输入是单点或低频目标，继续适合使用 JTC。
 - `SpeedJ/SpeedL` 属于 `SERVO`，输入是高频连续速度命令，不应继续沿 JTC 路线打磨。
 - `ServoJ/ServoL` 已实现第一版位置伺服，归入 `SERVO`，通过 motion server 转换为 MoveIt Servo 速度输入。
@@ -45,11 +45,10 @@
   - 二者继续复用 MoveIt Servo 的碰撞、奇异点、joint limit 缩放和 controller 切换链路。
   - `ServoL` 当前不保证严格直线；严格直线仍使用 `MoveL`。
 
-- `DRAG`
-  - 已在 `easyarm_hardware` 中实现。
-  - 当前逻辑是 `kp=0`、`kd=drag_kd`、`velocity=0`、`torque=gravity(q) * drag_gravity_scale`。
-  - 该功能已经真机可用，短期不迁移。
-  - 已新增 `easyarm_controller/EasyArmFreedriveController` 第一阶段控制器，并通过 `/easyarm/set_mode FREE_DRIVE` 进入。
+- `FREE_DRIVE`
+  - 已新增 `easyarm_controller/EasyArmFreedriveController`，并通过 `/easyarm/set_mode FREE_DRIVE` 进入。
+  - 第一阶段逻辑对齐旧 hardware `DRAG`：`kp=0`、`kd=drag_kd`、`velocity=0`、`torque=gravity(q) * drag_gravity_scale`。
+  - 旧 hardware `DRAG` 分支暂时只作为内部兼容路径保留，不再作为 motion server 对外接口。
 
 - Gravity compensation
   - 当前 `easyarm_hardware` 直接依赖 `easyarm_dynamics`。
@@ -65,7 +64,7 @@
 IDLE
   无运动输入，硬件保持安全阻尼或停止状态。
 
-DRAG
+FREE_DRIVE
   无上层运动输入。
   输入来源是人手外力。
   控制目标是重力补偿 + 阻尼，让机械臂可被安全拖动。
@@ -91,7 +90,7 @@ hardware / motor mode:
 
 robot control mode:
   IDLE
-  DRAG
+  FREE_DRIVE
   MOVE
   SERVO
 ```
@@ -161,7 +160,7 @@ SERVO:
   - `/servo_node/delta_twist_cmds`
 - `easyarm_app` 只调用 EasyArm 自己暴露的接口。
 - `easyarm_motion_server` 负责：
-  - MOVE / SERVO / DRAG 模式协调。
+  - MOVE / SERVO / FREE_DRIVE 模式协调。
   - controller 切换。
   - MoveIt Servo 启停。
   - stop / hold / timeout 处理。
@@ -253,10 +252,10 @@ easyarm_controller
    - controller 已调用 `easyarm_dynamics` 计算 gravity feedforward，后续可扩展为速度/加速度/摩擦等完整前馈。
 
 2. `EasyArmFreedriveController`
-   - 迁移前保留 hardware 内现有 `DRAG`。
-   - 已新增，并通过 `/easyarm/set_mode FREE_DRIVE` 切换进入。
+   - 对外入口统一为 `/easyarm/set_mode FREE_DRIVE`。
+   - 旧 hardware `DRAG` 分支暂时只作为内部兼容路径保留。
    - 第一阶段输出 `position=current`、`velocity=0`、`kp=0`、`kd=drag_kd`、`effort=gravity(q) * drag_gravity_scale`。
-   - 原型稳定后，再评估是否替换 hardware 内现有 `DRAG`。
+   - 原型稳定后，再评估是否删除 hardware 内现有 `DRAG`。
 
 3. `EasyArmTrajectoryController`
    - 只有当 JTC 无法满足 `MoveJ/MoveL` 需求时再考虑。
@@ -273,7 +272,7 @@ easyarm_controller
 ```text
 Robot Control Mode                  # 机器人控制模式：决定当前谁在控制机械臂、输入频率是什么
   IDLE                              # 空闲/阻尼/停止状态
-  DRAG                              # 拖拽模式：人手施加外力，系统做重力补偿和阻尼
+  FREE_DRIVE                        # 拖拽模式：人手施加外力，系统做重力补偿和阻尼
   MOVE                              # 规划运动模式：接收单点或低频目标，执行完整轨迹
   SERVO                             # 实时伺服模式：接收高频连续输入，实时跟随
 
@@ -300,14 +299,14 @@ Task Skill / Interface              # 任务技能或对外接口：用户真正
   insertion                         # 插孔/装配
 ```
 
-`DRAG`、`MOVE`、`SERVO` 是控制模式；阻抗、导纳、重力补偿、混合力位控制是控制策略；`MoveJ`、
+`FREE_DRIVE`、`MOVE`、`SERVO` 是控制模式；阻抗、导纳、重力补偿、混合力位控制是控制策略；`MoveJ`、
 `SpeedJ`、恒力按压、打磨、插孔等是接口或任务技能。
 
 ### 输入频率分类
 
-`DRAG`、`MOVE`、`SERVO` 的主要差异可以从输入频率理解：
+`FREE_DRIVE`、`MOVE`、`SERVO` 的主要差异可以从输入频率理解：
 
-- `DRAG`
+- `FREE_DRIVE`
   - 无上层运动输入。
   - 输入来源是人手外力。
   - 当前实现是重力补偿 + 阻尼。
@@ -465,7 +464,7 @@ q_cmd += qd_cmd * dt
 
 ### Stage 1: 现状稳定和文档化
 
-- 保留现有 `MoveJ/MoveL`、`SpeedJ/SpeedL`、`DRAG` 行为。
+- 保留现有 `MoveJ/MoveL`、`SpeedJ/SpeedL`、`FREE_DRIVE` 行为。
 - 记录当前架构限制。
 - 不修改真实硬件默认行为。
 - 不修改 motor ID、direction、offset、joint limit、CAN 参数、control gain 或 `use_mock_hardware` 默认值。
@@ -497,7 +496,7 @@ q_cmd += qd_cmd * dt
 
 - 继续完善失败恢复和状态上报。
 - controller 切换耗时和边界条件。
-- `SERVO` 与 hardware `POSITION/IDLE/DRAG` 历史模式的命名解耦。
+- `SERVO` 与 hardware `POSITION/IDLE/DRAG` 历史模式的命名解耦；对外拖拽入口统一为 `FREE_DRIVE`。
 
 ### Stage 4: 扩展 EasyArmServoController
 
@@ -509,11 +508,11 @@ q_cmd += qd_cmd * dt
 
 ### Stage 5: EasyArmFreedriveController / FREE_DRIVE
 
-- 已新增 `EasyArmFreedriveController`，但不要立即替换 hardware 内现有 `DRAG`。
+- 已新增 `EasyArmFreedriveController`，对外入口统一为 `FREE_DRIVE`；旧 hardware `DRAG` 暂时只作为内部兼容路径保留。
 - 第一阶段让 `easyarm_freedrive_controller` 默认 inactive，通过 `/easyarm/set_mode FREE_DRIVE` 由 motion server 切换进入。
 - 目标行为对齐当前 hardware DRAG：`kp=0`、`kd=drag_kd`、`velocity=0`、`effort=gravity(q) * drag_gravity_scale`。
 - 验证 `MOVE -> FREE_DRIVE`、`SERVO -> FREE_DRIVE`、`FREE_DRIVE -> MOVE/SERVO` 切换不会回跳、冲击或残留旧目标。
-- 手感和安全性不低于 hardware DRAG 后，再考虑是否用 FREE_DRIVE 替换旧 hardware DRAG。
+- FREE_DRIVE 手感和安全性持续验证稳定后，再考虑删除旧 hardware DRAG 分支。
 - `MoveJ/MoveL` 继续使用 JTC，除非后续证明 JTC 无法满足轨迹执行和动力学补偿需求。
 
 ## Test Strategy
@@ -536,7 +535,7 @@ ros2 topic hz /easyarm_servo_controller/joint_trajectory
 - controller 切换时不会出现旧 JTC 目标残留导致的回跳。
 - `/easyarm/stop` 可以停止 MoveIt Servo 输出，并让机械臂进入安全 hold。
 - `safe_shutdown.sh` 不受影响，仍可回到安全位并 deactivate hardware。
-- `DRAG` 模式保持现有手感和安全行为。
+- `FREE_DRIVE` 模式保持拖拽手感和安全行为。
 - gravity compensation 拆分前后不能出现双重补偿。
 
 真实硬件阶段：
@@ -555,7 +554,7 @@ ros2 topic hz /easyarm_servo_controller/joint_trajectory
 
 - 本计划记录后续架构方向，不代表当前已全部实现。
 - `ServoJ/ServoL` 已实现第一版并完成真机测试。
-- `DRAG` 已实现且当前仍保留在 `easyarm_hardware`；下一步只做 controller 原型，不直接替换。
+- `FREE_DRIVE` 已接入 motion server；旧 hardware `DRAG` 当前仍保留在 `easyarm_hardware` 作为内部兼容路径。
 - `MoveJ/MoveL` 长期优先继续使用 JTC。
 - `SpeedJ/SpeedL/ServoJ/ServoL` 走实时链路，不再继续沿 JTC 路线打磨。
-- 自定义 controller 已成为 SERVO 主线；FREE_DRIVE controller 已接入 motion server，后续决定是否替换现有 hardware DRAG 行为。
+- 自定义 controller 已成为 SERVO 主线；FREE_DRIVE controller 已接入 motion server，后续决定何时删除旧 hardware DRAG 行为。

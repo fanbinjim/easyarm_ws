@@ -124,8 +124,8 @@ ros2 topic echo /servo_node/status
 
 ## Free Drive Controller
 
-`easyarm_freedrive_controller` 是第一阶段 FREE_DRIVE controller，默认 inactive，不替换
-当前已经真机可用的 hardware `DRAG`。
+`easyarm_freedrive_controller` 是 FREE_DRIVE controller，默认 inactive，由
+motion server 在进入 `FREE_DRIVE` 时切换激活。
 
 测试时使用 motion server 的模式接口：
 
@@ -135,7 +135,8 @@ ros2 control list_hardware_interfaces
 ros2 run easyarm_app easyarm set-mode POSITION
 ```
 
-`/easyarm/set_mode DRAG` 仍表示旧 hardware DRAG，不走 `easyarm_freedrive_controller`。
+`/easyarm/set_mode DRAG` 已废弃，对外请统一使用 `FREE_DRIVE`。旧 hardware
+`DRAG` 分支仅作为内部兼容路径暂时保留。
 
 ## Safe Shutdown
 

@@ -35,7 +35,7 @@ inline std::string normalize_mode(std::string mode)
 
 inline bool is_valid_mode(const std::string & mode)
 {
-  return mode == "POSITION" || mode == "IDLE" || mode == "DRAG";
+  return mode == "POSITION" || mode == "IDLE";
 }
 
 }  // namespace easyarm_motion_server

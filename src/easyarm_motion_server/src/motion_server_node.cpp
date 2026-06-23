@@ -460,8 +460,12 @@ bool MotionServerNode::setMode(const std::string & requested_mode, std::string &
   if (mode == "FREE_DRIVE") {
     return enterFreeDriveMode(message);
   }
+  if (mode == "DRAG") {
+    message = "DRAG is deprecated. Use FREE_DRIVE instead.";
+    return false;
+  }
   if (!is_valid_mode(mode)) {
-    message = "Unknown mode '" + requested_mode + "'. Expected POSITION, IDLE, DRAG, or FREE_DRIVE";
+    message = "Unknown mode '" + requested_mode + "'. Expected POSITION, IDLE, or FREE_DRIVE";
     return false;
   }
   if (!exitFreeDriveMode(message)) {
@@ -525,6 +529,12 @@ bool MotionServerNode::exitFreeDriveMode(std::string & message)
     return switchControllers(trajectory_controller_name_, freedrive_controller_name_, message);
   }
   return true;
+}
+
+bool MotionServerNode::isFreeDriveActive(std::string & message)
+{
+  const auto freedrive_state = controllerState(freedrive_controller_name_, message);
+  return freedrive_state.has_value() && *freedrive_state == "active";
 }
 
 bool MotionServerNode::switchControllers(
@@ -661,6 +671,7 @@ void MotionServerNode::handleStop(
   const std::shared_ptr<easyarm_interfaces::srv::Stop::Request>,
   std::shared_ptr<easyarm_interfaces::srv::Stop::Response> response)
 {
+  std::string message;
   stop_requested_.store(true);
   moveit_executor_->stop();
   if (position_servo_executor_->isActive()) {
@@ -675,6 +686,11 @@ void MotionServerNode::handleStop(
       releaseTask();
     }
   }
+  if (isFreeDriveActive(message) && !exitFreeDriveMode(message)) {
+    response->success = false;
+    response->message = "Stop requested, but failed to exit FREE_DRIVE: " + message;
+    return;
+  }
   response->success = true;
   response->message = "Stop requested";
 }
@@ -684,8 +700,7 @@ void MotionServerNode::handleGetState(
   std::shared_ptr<easyarm_interfaces::srv::GetState::Response> response)
 {
   std::string controller_message;
-  const auto freedrive_state = controllerState(freedrive_controller_name_, controller_message);
-  const bool freedrive_active = freedrive_state.has_value() && *freedrive_state == "active";
+  const bool freedrive_active = isFreeDriveActive(controller_message);
 
   std::string mode;
   std::string message;
@@ -853,6 +868,11 @@ bool MotionServerNode::prepareServoCommand(const std::string & task, std::string
   }
 
   if (!claimTask(task, message)) {
+    return false;
+  }
+
+  if (!exitFreeDriveMode(message)) {
+    releaseTask();
     return false;
   }
 
