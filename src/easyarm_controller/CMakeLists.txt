@@ -21,7 +21,7 @@ find_package(trajectory_msgs REQUIRED)
 add_library(easyarm_controller SHARED
   src/dynamics_provider.cpp
   src/joint_motion_control_command.cpp
-  src/easyarm_drag_controller.cpp
+  src/easyarm_freedrive_controller.cpp
   src/easyarm_servo_controller.cpp
 )
 target_include_directories(easyarm_controller PUBLIC

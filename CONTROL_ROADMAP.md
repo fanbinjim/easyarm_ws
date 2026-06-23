@@ -49,7 +49,7 @@
   - 已在 `easyarm_hardware` 中实现。
   - 当前逻辑是 `kp=0`、`kd=drag_kd`、`velocity=0`、`torque=gravity(q) * drag_gravity_scale`。
   - 该功能已经真机可用，短期不迁移。
-  - 已新增 `easyarm_controller/EasyArmDragController` 第一阶段 inactive 原型，用于手动 controller 切换验证 controller 层拖拽手感。
+  - 已新增 `easyarm_controller/EasyArmFreedriveController` 第一阶段控制器，并通过 `/easyarm/set_mode FREE_DRIVE` 进入。
 
 - Gravity compensation
   - 当前 `easyarm_hardware` 直接依赖 `easyarm_dynamics`。
@@ -237,7 +237,7 @@ effort / feedforward source:
 ```text
 easyarm_controller
   EasyArmServoController
-  EasyArmDragController       # 已新增 inactive 原型
+  EasyArmFreedriveController       # 已新增，FREE_DRIVE 入口使用
   EasyArmTrajectoryController # 后续评估
 ```
 
@@ -252,11 +252,11 @@ easyarm_controller
    - `JointTrajectory` velocity 已经传递到 hardware；acceleration 先缓存，后续用于完整动力学 effort。
    - controller 已调用 `easyarm_dynamics` 计算 gravity feedforward，后续可扩展为速度/加速度/摩擦等完整前馈。
 
-2. `EasyArmDragController`
+2. `EasyArmFreedriveController`
    - 迁移前保留 hardware 内现有 `DRAG`。
-   - 已新增 inactive 原型，先通过手动 controller 切换真机验证。
+   - 已新增，并通过 `/easyarm/set_mode FREE_DRIVE` 切换进入。
    - 第一阶段输出 `position=current`、`velocity=0`、`kp=0`、`kd=drag_kd`、`effort=gravity(q) * drag_gravity_scale`。
-   - 原型稳定后，再评估是否由 motion server 接管 DRAG controller。
+   - 原型稳定后，再评估是否替换 hardware 内现有 `DRAG`。
 
 3. `EasyArmTrajectoryController`
    - 只有当 JTC 无法满足 `MoveJ/MoveL` 需求时再考虑。
@@ -507,13 +507,13 @@ q_cmd += qd_cmd * dt
 - 后续把 acceleration 用于加速度前馈，并把 effort 从 gravity-only 扩展为 full dynamics effort。
 - 逐步把 gravity compensation、feedforward、impedance/admittance 从 hardware 迁移到 EasyArm 自定义 streaming controller。
 
-### Stage 5: EasyArmDragController 原型
+### Stage 5: EasyArmFreedriveController / FREE_DRIVE
 
-- 已新增 `EasyArmDragController` 原型，但不要立即替换 hardware 内现有 `DRAG`。
-- 第一阶段让 `easyarm_drag_controller` 默认 inactive，只通过 `ros2 control switch_controllers` 手动切换真机测试。
+- 已新增 `EasyArmFreedriveController`，但不要立即替换 hardware 内现有 `DRAG`。
+- 第一阶段让 `easyarm_freedrive_controller` 默认 inactive，通过 `/easyarm/set_mode FREE_DRIVE` 由 motion server 切换进入。
 - 目标行为对齐当前 hardware DRAG：`kp=0`、`kd=drag_kd`、`velocity=0`、`effort=gravity(q) * drag_gravity_scale`。
-- 验证 `MOVE -> DRAG`、`SERVO -> DRAG`、`DRAG -> MOVE/SERVO` 切换不会回跳、冲击或残留旧目标。
-- 手感和安全性不低于 hardware DRAG 后，再考虑由 `easyarm_motion_server` 管理 DRAG controller。
+- 验证 `MOVE -> FREE_DRIVE`、`SERVO -> FREE_DRIVE`、`FREE_DRIVE -> MOVE/SERVO` 切换不会回跳、冲击或残留旧目标。
+- 手感和安全性不低于 hardware DRAG 后，再考虑是否用 FREE_DRIVE 替换旧 hardware DRAG。
 - `MoveJ/MoveL` 继续使用 JTC，除非后续证明 JTC 无法满足轨迹执行和动力学补偿需求。
 
 ## Test Strategy
@@ -558,4 +558,4 @@ ros2 topic hz /easyarm_servo_controller/joint_trajectory
 - `DRAG` 已实现且当前仍保留在 `easyarm_hardware`；下一步只做 controller 原型，不直接替换。
 - `MoveJ/MoveL` 长期优先继续使用 JTC。
 - `SpeedJ/SpeedL/ServoJ/ServoL` 走实时链路，不再继续沿 JTC 路线打磨。
-- 自定义 controller 已成为 SERVO 主线；后续 DRAG controller 先以 inactive 原型验证，再决定是否替换现有硬件行为。
+- 自定义 controller 已成为 SERVO 主线；FREE_DRIVE controller 已接入 motion server，后续决定是否替换现有 hardware DRAG 行为。

@@ -9,8 +9,8 @@ controller_manager:
     easyarm_servo_controller:
       type: easyarm_controller/EasyArmServoController
 
-    easyarm_drag_controller:
-      type: easyarm_controller/EasyArmDragController
+    easyarm_freedrive_controller:
+      type: easyarm_controller/EasyArmFreedriveController
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -56,7 +56,7 @@ easyarm_servo_controller:
     kp: 120.0
     kd: 3.0
 
-easyarm_drag_controller:
+easyarm_freedrive_controller:
   ros__parameters:
     joints:
       - Joint1

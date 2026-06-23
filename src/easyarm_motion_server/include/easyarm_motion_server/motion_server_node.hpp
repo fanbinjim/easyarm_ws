@@ -3,9 +3,12 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 #include <control_msgs/msg/joint_jog.hpp>
+#include <controller_manager_msgs/srv/list_controllers.hpp>
+#include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <easyarm_interfaces/action/move_j.hpp>
 #include <easyarm_interfaces/action/move_l.hpp>
 #include <easyarm_interfaces/action/move_named_state.hpp>
@@ -71,7 +74,15 @@ private:
   bool claimTask(const std::string & task, std::string & message);
   void releaseTask();
   bool prepareMotion(std::string & message);
-  bool setHardwareMode(const std::string & requested_mode, std::string & message);
+  bool setMode(const std::string & requested_mode, std::string & message);
+  bool setHardwareMode(const std::string & mode, std::string & message);
+  bool enterFreeDriveMode(std::string & message);
+  bool exitFreeDriveMode(std::string & message);
+  bool switchControllers(
+    const std::string & activate,
+    const std::string & deactivate,
+    std::string & message);
+  std::optional<std::string> controllerState(const std::string & controller_name, std::string & message);
   void updateCurrentMode(const std::string & mode);
   std::string activeTaskSnapshot();
 
@@ -114,6 +125,10 @@ private:
   std::unique_ptr<MoveItMotionExecutor> moveit_executor_;
   std::unique_ptr<MoveItServoRuntime> moveit_servo_runtime_;
   std::unique_ptr<PositionServoExecutor> position_servo_executor_;
+  rclcpp::Client<controller_manager_msgs::srv::SwitchController>::SharedPtr switch_controller_client_;
+  rclcpp::Client<controller_manager_msgs::srv::ListControllers>::SharedPtr list_controllers_client_;
+  std::string freedrive_controller_name_{"easyarm_freedrive_controller"};
+  std::string trajectory_controller_name_{"arm_controller"};
 
   std::mutex state_mutex_;
   std::atomic_bool busy_{false};

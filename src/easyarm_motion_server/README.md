@@ -41,11 +41,13 @@ max_joint_state_age=0.5
 
 执行 MoveJ/MoveL 前会等待 `/joint_states` 包含 6 个关节并且时间戳足够新，避免刚启动时 MoveIt 因当前状态过期而在执行阶段 abort。
 
-`/easyarm/set_mode` 切到 `POSITION` 时，会先读取当前 `/joint_states`，向 `arm_controller/follow_joint_trajectory` 发送当前点 hold trajectory，然后再设置 `controller_mode=POSITION`，避免从 `DRAG` 回到 `POSITION` 时回到旧目标位置。
+`/easyarm/set_mode` 切到 `POSITION` 时，会先确保 `easyarm_freedrive_controller` 已退出并切回 `arm_controller`，再读取当前 `/joint_states`，向 `arm_controller/follow_joint_trajectory` 发送当前点 hold trajectory，然后设置 `controller_mode=POSITION`，避免从 `DRAG` 或 `FREE_DRIVE` 回到 `POSITION` 时回到旧目标位置。
+
+`/easyarm/set_mode FREE_DRIVE` 是 controller 层 freedrive 测试入口。它保持 hardware mode 为 `POSITION`，停止当前 MoveIt/Servo 输出，切换 `arm_controller -> easyarm_freedrive_controller`。`/easyarm/set_mode DRAG` 仍表示旧 hardware DRAG。
 
 `SpeedJ/SpeedL` 使用流式 topic 输入。收到 `/easyarm/speedj_cmd` 或 `/easyarm/speedl_cmd` 后，motion server 会在硬件模式为 `POSITION` 时自动切换到 `easyarm_servo_controller`，启动 MoveIt Servo，并转发命令到 `/servo_node/delta_joint_cmds` 或 `/servo_node/delta_twist_cmds`。输入超时或调用 `/easyarm/stop` 后，会发送 zero command 并切回 `arm_controller`。
 
-历史说明：当前 `/easyarm/set_mode` 和 `/easyarm/get_state.mode` 封装的是 `easyarm_hardware` 的 hardware mode，只支持 `POSITION/IDLE/DRAG`。这些不是理想的上层 `MOVE/SERVO/DRAG` control mode 分层。本次保留该历史行为，避免影响已有 DRAG、safe shutdown 和真机安全逻辑。
+历史说明：当前 `/easyarm/set_mode` 和 `/easyarm/get_state.mode` 仍主要封装 `easyarm_hardware` 的 hardware mode，其中 `FREE_DRIVE` 是过渡期新增的 controller 层测试模式。`DRAG` 继续表示旧 hardware DRAG，避免影响已有 DRAG、safe shutdown 和真机安全逻辑。
 
 第一版不封装 ServoJ/ServoL。
 

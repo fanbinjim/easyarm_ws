@@ -18,6 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  servol 0.25 0.0 0.25 0.0 0.0 0.0 1.0 --duration 1.0 --rate 50\n"
             "  servol_teleop    # in easyarm_shell: keyboard ServoL target mode\n"
             "  set-mode DRAG\n"
+            "  set-mode FREE_DRIVE\n"
             "  set-mode POSITION\n"
             "  speedl_teleop    # in easyarm_shell: keyboard Cartesian teleop mode\n"
             "  ss               # in easyarm_shell: safe_shutdown alias"
@@ -76,10 +77,16 @@ def build_parser() -> argparse.ArgumentParser:
     set_mode = subparsers.add_parser(
         "set-mode",
         help="Call /easyarm/set_mode",
-        epilog="examples:\n  set-mode DRAG\n  set-mode POSITION",
+        epilog="examples:\n  set-mode DRAG\n  set-mode FREE_DRIVE\n  set-mode POSITION",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    set_mode.add_argument("mode", choices=["POSITION", "IDLE", "DRAG", "position", "idle", "drag"])
+    set_mode.add_argument(
+        "mode",
+        choices=[
+            "POSITION", "IDLE", "DRAG", "FREE_DRIVE",
+            "position", "idle", "drag", "free_drive",
+        ],
+    )
 
     subparsers.add_parser("stop", help="Call /easyarm/stop")
     subparsers.add_parser("get-state", help="Call /easyarm/get_state")

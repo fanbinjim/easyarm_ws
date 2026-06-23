@@ -5,13 +5,13 @@
 当前包含：
 
 ```text
-easyarm_controller/EasyArmDragController
+easyarm_controller/EasyArmFreedriveController
 easyarm_controller/EasyArmServoController
 ```
 
 `EasyArmServoController` 用于 `SERVO` 链路，接收 MoveIt Servo 的 200Hz 流式输出。当前版本固定输出完整关节运控 command 接口：`position + velocity + kp + kd + effort`。其中 `position` 来自上游输入，`velocity` 来自 `JointTrajectory.velocities`，`kp/kd` 来自 controller 参数，`effort` 由 `gravity(q_target)` 计算得到。
 
-`EasyArmDragController` 是 DRAG controller 化的第一阶段原型。它不接收外部运动目标，只读取当前 joint position，并输出 `kp=0`、`velocity=0`、`kd=drag_kd`、`effort=gravity(q)`。默认只 inactive 加载，不替换当前 hardware 内已经真机可用的 `/easyarm/set_mode DRAG`。
+`EasyArmFreedriveController` 是 `FREE_DRIVE` 控制模式的第一阶段 controller。它不接收外部运动目标，只读取当前 joint position，并输出 `kp=0`、`velocity=0`、`kd`、`effort=gravity(q)`。默认只 inactive 加载，不替换当前 hardware 内已经真机可用的 `/easyarm/set_mode DRAG`。
 
 ## Controller
 
@@ -213,21 +213,21 @@ easyarm_app
 
 `easyarm_motion_server` 负责在 `arm_controller` 和 `easyarm_servo_controller` 之间切换。不要手动同时激活这两个 controller。
 
-### EasyArmDragController
+### EasyArmFreedriveController
 
 插件名：
 
 ```text
-easyarm_controller/EasyArmDragController
+easyarm_controller/EasyArmFreedriveController
 ```
 
 配置示例：
 
 ```yaml
-easyarm_drag_controller:
-  type: easyarm_controller/EasyArmDragController
+easyarm_freedrive_controller:
+  type: easyarm_controller/EasyArmFreedriveController
 
-easyarm_drag_controller:
+easyarm_freedrive_controller:
   ros__parameters:
     joints:
       - Joint1
@@ -259,7 +259,7 @@ kd = kd
 effort = gravity(current joint position) * gravity_compensation_scale
 ```
 
-测试该 controller 时保持 hardware mode 为 `POSITION`，不要调用 `/easyarm/set_mode DRAG`。旧的 hardware `DRAG` 分支仍保留，真机稳定路径不变。
+测试该 controller 时调用 `/easyarm/set_mode FREE_DRIVE`。motion server 会保持 hardware mode 为 `POSITION`，并切换到 `easyarm_freedrive_controller`。旧的 hardware `DRAG` 分支仍保留，真机稳定路径不变。
 
 ## Build
 
@@ -287,7 +287,7 @@ source install/setup.bash
 
 ```bash
 ros2 control list_controller_types | grep EasyArmServoController
-ros2 control list_controller_types | grep EasyArmDragController
+ros2 control list_controller_types | grep EasyArmFreedriveController
 ```
 
 启动 mock：
@@ -308,7 +308,7 @@ ros2 control list_controllers
 joint_state_broadcaster active
 arm_controller active
 easyarm_servo_controller inactive
-easyarm_drag_controller inactive
+easyarm_freedrive_controller inactive
 ```
 
 运行 SpeedJ：
@@ -340,16 +340,15 @@ ros2 control list_hardware_interfaces
 ros2 run easyarm_app easyarm stop
 ```
 
-测试 DragController 原型：
+测试 FreedriveController：
 
 ```bash
-ros2 run easyarm_app easyarm set-mode POSITION
-ros2 control switch_controllers --deactivate arm_controller --activate easyarm_drag_controller --strict
+ros2 run easyarm_app easyarm set-mode FREE_DRIVE
 ros2 control list_hardware_interfaces
-ros2 control switch_controllers --deactivate easyarm_drag_controller --activate arm_controller --strict
+ros2 run easyarm_app easyarm set-mode POSITION
 ```
 
-`easyarm_drag_controller` active 时，`Joint*/position`、`Joint*/velocity`、`Joint*/kp`、`Joint*/kd`、`Joint*/effort` command interface 应被 claimed。该原型只用于验证 controller 层 DRAG 手感，暂不由 `easyarm_motion_server` 自动管理。
+`easyarm_freedrive_controller` active 时，`Joint*/position`、`Joint*/velocity`、`Joint*/kp`、`Joint*/kd`、`Joint*/effort` command interface 应被 claimed。`set-mode POSITION` 会切回 `arm_controller`。
 
 ## Current Limitations
 
@@ -358,7 +357,7 @@ ros2 control switch_controllers --deactivate easyarm_drag_controller --activate 
 - JointTrajectory acceleration 已解析和缓存，但暂未用于动力学前馈。
 - feedforward effort 当前只包含 gravity，不计算完整 inverse dynamics。
 - `MoveJ/MoveL` 仍依赖 `easyarm_hardware` 中现有 gravity compensation。
-- 默认 `DRAG` 仍保留在 `easyarm_hardware`，`EasyArmDragController` 只是 inactive 原型。
+- 默认 `DRAG` 仍保留在 `easyarm_hardware`，`FREE_DRIVE` 使用 `EasyArmFreedriveController` 作为过渡测试入口。
 - 不修改 motor ID、direction、offset、joint limit、CAN 参数、control gain 或 `use_mock_hardware` 默认值。
 
 后续如果要做完整动力学 controller，可以继续使用 `JointTrajectory` 中的 position / velocity / acceleration 生成更完整的 feedforward command。

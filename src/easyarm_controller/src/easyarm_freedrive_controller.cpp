@@ -1,4 +1,4 @@
-#include "easyarm_controller/easyarm_drag_controller.hpp"
+#include "easyarm_controller/easyarm_freedrive_controller.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,7 +13,7 @@
 namespace easyarm_controller
 {
 
-controller_interface::CallbackReturn EasyArmDragController::on_init()
+controller_interface::CallbackReturn EasyArmFreedriveController::on_init()
 {
   try {
     auto_declare<std::vector<std::string>>("joints", std::vector<std::string>{});
@@ -34,21 +34,21 @@ controller_interface::CallbackReturn EasyArmDragController::on_init()
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
-controller_interface::InterfaceConfiguration EasyArmDragController::command_interface_configuration() const
+controller_interface::InterfaceConfiguration EasyArmFreedriveController::command_interface_configuration() const
 {
   return {
     controller_interface::interface_configuration_type::INDIVIDUAL,
     interfaceNames(command_interface_names_)};
 }
 
-controller_interface::InterfaceConfiguration EasyArmDragController::state_interface_configuration() const
+controller_interface::InterfaceConfiguration EasyArmFreedriveController::state_interface_configuration() const
 {
   return {
     controller_interface::interface_configuration_type::INDIVIDUAL,
     interfaceNames(state_interface_names_)};
 }
 
-controller_interface::CallbackReturn EasyArmDragController::on_configure(
+controller_interface::CallbackReturn EasyArmFreedriveController::on_configure(
   const rclcpp_lifecycle::State &)
 {
   joint_names_ = get_node()->get_parameter("joints").as_string_array();
@@ -88,14 +88,14 @@ controller_interface::CallbackReturn EasyArmDragController::on_configure(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Configured EasyArmDragController with %zu joints, kd=%.3f, gravity_scale=%.3f",
+    "Configured EasyArmFreedriveController with %zu joints, kd=%.3f, gravity_scale=%.3f",
     joint_names_.size(),
     kd_,
     gravity_compensation_scale_);
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
-controller_interface::CallbackReturn EasyArmDragController::on_activate(
+controller_interface::CallbackReturn EasyArmFreedriveController::on_activate(
   const rclcpp_lifecycle::State &)
 {
   if (command_interfaces_.size() != joint_names_.size() * command_interface_names_.size()) {
@@ -117,29 +117,29 @@ controller_interface::CallbackReturn EasyArmDragController::on_activate(
   if (!dynamics_provider_.initialize(joint_names_, get_node()->get_logger())) {
     return controller_interface::CallbackReturn::ERROR;
   }
-  if (!updateDragCommandFromState()) {
+  if (!updateFreedriveCommandFromState()) {
     return controller_interface::CallbackReturn::ERROR;
   }
 
   writeCommand();
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Activated EasyArmDragController; keep hardware mode POSITION for this prototype");
+    "Activated EasyArmFreedriveController; keep hardware mode POSITION for this prototype");
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
-controller_interface::CallbackReturn EasyArmDragController::on_deactivate(
+controller_interface::CallbackReturn EasyArmFreedriveController::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(get_node()->get_logger(), "Deactivated EasyArmDragController");
+  RCLCPP_INFO(get_node()->get_logger(), "Deactivated EasyArmFreedriveController");
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
-controller_interface::return_type EasyArmDragController::update(
+controller_interface::return_type EasyArmFreedriveController::update(
   const rclcpp::Time &,
   const rclcpp::Duration &)
 {
-  if (!updateDragCommandFromState()) {
+  if (!updateFreedriveCommandFromState()) {
     return controller_interface::return_type::ERROR;
   }
 
@@ -147,7 +147,7 @@ controller_interface::return_type EasyArmDragController::update(
   return controller_interface::return_type::OK;
 }
 
-std::vector<std::string> EasyArmDragController::interfaceNames(
+std::vector<std::string> EasyArmFreedriveController::interfaceNames(
   const std::vector<std::string> & interface_names) const
 {
   std::vector<std::string> names;
@@ -160,12 +160,12 @@ std::vector<std::string> EasyArmDragController::interfaceNames(
   return names;
 }
 
-bool EasyArmDragController::configureInterfaces()
+bool EasyArmFreedriveController::configureInterfaces()
 {
   if (command_interface_names_ != jointMotionControlInterfaceVector()) {
     RCLCPP_ERROR(
       get_node()->get_logger(),
-      "EasyArmDragController requires fixed command interface order: position, velocity, kp, kd, effort");
+      "EasyArmFreedriveController requires fixed command interface order: position, velocity, kp, kd, effort");
     return false;
   }
   if (state_interface_names_.empty()) {
@@ -177,14 +177,14 @@ bool EasyArmDragController::configureInterfaces()
       state_interface_names_.end(),
       [](const auto & interface_name) { return interface_name == hardware_interface::HW_IF_POSITION; }))
   {
-    RCLCPP_ERROR(get_node()->get_logger(), "EasyArmDragController requires position state interface");
+    RCLCPP_ERROR(get_node()->get_logger(), "EasyArmFreedriveController requires position state interface");
     return false;
   }
 
   return true;
 }
 
-bool EasyArmDragController::readCurrentPositions(std::vector<double> & positions) const
+bool EasyArmFreedriveController::readCurrentPositions(std::vector<double> & positions) const
 {
   positions.resize(joint_names_.size());
   for (size_t i = 0; i < joint_names_.size(); ++i) {
@@ -203,7 +203,7 @@ bool EasyArmDragController::readCurrentPositions(std::vector<double> & positions
   return true;
 }
 
-bool EasyArmDragController::updateDragCommandFromState()
+bool EasyArmFreedriveController::updateFreedriveCommandFromState()
 {
   std::vector<double> positions;
   if (!readCurrentPositions(positions)) {
@@ -216,7 +216,7 @@ bool EasyArmDragController::updateDragCommandFromState()
       get_node()->get_logger(),
       *get_node()->get_clock(),
       1000,
-      "Failed to compute drag feedforward effort; holding previous effort command");
+      "Failed to compute freedrive feedforward effort; holding previous effort command");
     efforts.clear();
   }
 
@@ -232,7 +232,7 @@ bool EasyArmDragController::updateDragCommandFromState()
   return true;
 }
 
-void EasyArmDragController::writeCommand()
+void EasyArmFreedriveController::writeCommand()
 {
   const auto count = std::min(joint_names_.size(), commands_.size());
   for (size_t i = 0; i < count; ++i) {
@@ -244,7 +244,7 @@ void EasyArmDragController::writeCommand()
   }
 }
 
-size_t EasyArmDragController::commandIndex(
+size_t EasyArmFreedriveController::commandIndex(
   const size_t joint_index,
   const std::string & interface_name) const
 {
@@ -256,7 +256,7 @@ size_t EasyArmDragController::commandIndex(
     static_cast<size_t>(std::distance(command_interface_names_.begin(), it));
 }
 
-size_t EasyArmDragController::stateIndex(
+size_t EasyArmFreedriveController::stateIndex(
   const size_t joint_index,
   const std::string & interface_name) const
 {
@@ -271,5 +271,5 @@ size_t EasyArmDragController::stateIndex(
 }  // namespace easyarm_controller
 
 PLUGINLIB_EXPORT_CLASS(
-  easyarm_controller::EasyArmDragController,
+  easyarm_controller::EasyArmFreedriveController,
   controller_interface::ControllerInterface)

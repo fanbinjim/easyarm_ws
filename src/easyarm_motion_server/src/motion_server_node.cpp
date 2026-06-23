@@ -2,10 +2,25 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 #include <thread>
+#include <vector>
 
 namespace easyarm_motion_server
 {
+namespace
+{
+constexpr auto kControllerServiceWaitTimeout = std::chrono::seconds(3);
+constexpr auto kControllerServiceCallTimeout = std::chrono::seconds(3);
+
+builtin_interfaces::msg::Duration secondsToDuration(const double seconds)
+{
+  builtin_interfaces::msg::Duration duration;
+  duration.sec = static_cast<int32_t>(seconds);
+  duration.nanosec = static_cast<uint32_t>((seconds - static_cast<double>(duration.sec)) * 1e9);
+  return duration;
+}
+}  // namespace
 
 MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
 : Node("easyarm_motion_server", options)
@@ -25,6 +40,8 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
     declare_parameter<double>("joint_state_wait_timeout", context_.joint_state_wait_timeout_sec);
   context_.max_joint_state_age_sec =
     declare_parameter<double>("max_joint_state_age", context_.max_joint_state_age_sec);
+  freedrive_controller_name_ =
+    declare_parameter<std::string>("freedrive_controller_name", freedrive_controller_name_);
 
   callback_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   joint_state_cache_ = std::make_unique<JointStateCache>(*this, context_);
@@ -32,8 +49,17 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
   hold_trajectory_sender_ = std::make_unique<HoldTrajectorySender>(*this, context_, *joint_state_cache_, callback_group_);
   moveit_executor_ = std::make_unique<MoveItMotionExecutor>(*this, context_);
   moveit_servo_runtime_ = std::make_unique<MoveItServoRuntime>(*this, callback_group_);
+  trajectory_controller_name_ = get_parameter("trajectory_controller_name").as_string();
   position_servo_executor_ =
     std::make_unique<PositionServoExecutor>(*this, context_, *joint_state_cache_, *moveit_servo_runtime_);
+  switch_controller_client_ = create_client<controller_manager_msgs::srv::SwitchController>(
+    "/controller_manager/switch_controller",
+    rmw_qos_profile_services_default,
+    callback_group_);
+  list_controllers_client_ = create_client<controller_manager_msgs::srv::ListControllers>(
+    "/controller_manager/list_controllers",
+    rmw_qos_profile_services_default,
+    callback_group_);
 
   movej_server_ = rclcpp_action::create_server<MoveJ>(
     this,
@@ -408,6 +434,9 @@ bool MotionServerNode::prepareMotion(std::string & message)
     message = "MoveGroupInterface is not initialized";
     return false;
   }
+  if (!exitFreeDriveMode(message)) {
+    return false;
+  }
 
   std::string mode;
   if (!hardware_mode_client_->queryMode(mode, message)) {
@@ -425,14 +454,25 @@ bool MotionServerNode::prepareMotion(std::string & message)
   return true;
 }
 
-bool MotionServerNode::setHardwareMode(const std::string & requested_mode, std::string & message)
+bool MotionServerNode::setMode(const std::string & requested_mode, std::string & message)
 {
   const std::string mode = normalize_mode(requested_mode);
+  if (mode == "FREE_DRIVE") {
+    return enterFreeDriveMode(message);
+  }
   if (!is_valid_mode(mode)) {
-    message = "Unknown mode '" + requested_mode + "'. Expected POSITION, IDLE, or DRAG";
+    message = "Unknown mode '" + requested_mode + "'. Expected POSITION, IDLE, DRAG, or FREE_DRIVE";
+    return false;
+  }
+  if (!exitFreeDriveMode(message)) {
     return false;
   }
 
+  return setHardwareMode(mode, message);
+}
+
+bool MotionServerNode::setHardwareMode(const std::string & mode, std::string & message)
+{
   if (mode == "POSITION" && !hold_trajectory_sender_->holdCurrentPosition(message)) {
     return false;
   }
@@ -443,6 +483,127 @@ bool MotionServerNode::setHardwareMode(const std::string & requested_mode, std::
 
   updateCurrentMode(mode);
   return true;
+}
+
+bool MotionServerNode::enterFreeDriveMode(std::string & message)
+{
+  if (position_servo_executor_->isActive()) {
+    position_servo_executor_->stop();
+  }
+  if (moveit_servo_runtime_->isActive()) {
+    moveit_servo_runtime_->stop();
+  }
+  moveit_executor_->stop();
+
+  std::string hardware_mode;
+  if (!hardware_mode_client_->queryMode(hardware_mode, message)) {
+    return false;
+  }
+  updateCurrentMode(hardware_mode);
+  if (hardware_mode != "POSITION" && !setHardwareMode("POSITION", message)) {
+    return false;
+  }
+  if (!joint_state_cache_->waitForFreshState(message)) {
+    return false;
+  }
+  if (!switchControllers(freedrive_controller_name_, trajectory_controller_name_, message)) {
+    return false;
+  }
+
+  updateCurrentMode("FREE_DRIVE");
+  message = "Mode set to FREE_DRIVE";
+  return true;
+}
+
+bool MotionServerNode::exitFreeDriveMode(std::string & message)
+{
+  const auto freedrive_state = controllerState(freedrive_controller_name_, message);
+  if (!freedrive_state.has_value()) {
+    return message.find("is not loaded") != std::string::npos;
+  }
+  if (*freedrive_state == "active") {
+    return switchControllers(trajectory_controller_name_, freedrive_controller_name_, message);
+  }
+  return true;
+}
+
+bool MotionServerNode::switchControllers(
+  const std::string & activate,
+  const std::string & deactivate,
+  std::string & message)
+{
+  const auto activate_state = controllerState(activate, message);
+  if (!activate_state.has_value()) {
+    return false;
+  }
+  const auto deactivate_state = controllerState(deactivate, message);
+  if (!deactivate_state.has_value()) {
+    return false;
+  }
+
+  std::vector<std::string> activate_controllers;
+  std::vector<std::string> deactivate_controllers;
+  if (*activate_state != "active") {
+    activate_controllers.push_back(activate);
+  }
+  if (*deactivate_state == "active") {
+    deactivate_controllers.push_back(deactivate);
+  }
+  if (activate_controllers.empty() && deactivate_controllers.empty()) {
+    return true;
+  }
+
+  if (!switch_controller_client_->wait_for_service(kControllerServiceWaitTimeout)) {
+    message = "/controller_manager/switch_controller service is not available";
+    return false;
+  }
+
+  auto request = std::make_shared<controller_manager_msgs::srv::SwitchController::Request>();
+  request->activate_controllers = activate_controllers;
+  request->deactivate_controllers = deactivate_controllers;
+  request->strictness = controller_manager_msgs::srv::SwitchController::Request::STRICT;
+  request->activate_asap = true;
+  request->timeout = secondsToDuration(3.0);
+
+  auto future = switch_controller_client_->async_send_request(request);
+  if (future.wait_for(kControllerServiceCallTimeout) != std::future_status::ready) {
+    message = "Timeout switching controllers: activate " + activate + ", deactivate " + deactivate;
+    return false;
+  }
+
+  const auto response = future.get();
+  if (!response->ok) {
+    message = "Failed to switch controllers: activate " + activate + ", deactivate " + deactivate;
+    return false;
+  }
+  return true;
+}
+
+std::optional<std::string> MotionServerNode::controllerState(
+  const std::string & controller_name,
+  std::string & message)
+{
+  if (!list_controllers_client_->wait_for_service(kControllerServiceWaitTimeout)) {
+    message = "/controller_manager/list_controllers service is not available";
+    return std::nullopt;
+  }
+
+  auto request = std::make_shared<controller_manager_msgs::srv::ListControllers::Request>();
+  auto future = list_controllers_client_->async_send_request(request);
+  if (future.wait_for(kControllerServiceCallTimeout) != std::future_status::ready) {
+    message = "Timeout listing controllers";
+    return std::nullopt;
+  }
+
+  const auto response = future.get();
+  for (const auto & controller : response->controller) {
+    if (controller.name == controller_name) {
+      return controller.state;
+    }
+  }
+
+  message = "Controller '" + controller_name + "' is not loaded";
+  return std::nullopt;
 }
 
 void MotionServerNode::updateCurrentMode(const std::string & mode)
@@ -492,7 +653,7 @@ void MotionServerNode::handleSetMode(
     response->success = false;
     return;
   }
-  response->success = setHardwareMode(request->mode, response->message);
+  response->success = setMode(request->mode, response->message);
   releaseTask();
 }
 
@@ -522,6 +683,10 @@ void MotionServerNode::handleGetState(
   const std::shared_ptr<easyarm_interfaces::srv::GetState::Request>,
   std::shared_ptr<easyarm_interfaces::srv::GetState::Response> response)
 {
+  std::string controller_message;
+  const auto freedrive_state = controllerState(freedrive_controller_name_, controller_message);
+  const bool freedrive_active = freedrive_state.has_value() && *freedrive_state == "active";
+
   std::string mode;
   std::string message;
   if (!hardware_mode_client_->queryMode(mode, message)) {
@@ -534,7 +699,7 @@ void MotionServerNode::handleGetState(
     return;
   }
 
-  updateCurrentMode(mode);
+  updateCurrentMode(freedrive_active ? "FREE_DRIVE" : mode);
   response->success = true;
   response->message = "OK";
   response->busy = busy_.load();

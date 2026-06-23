@@ -142,11 +142,11 @@ def generate_launch_description():
         output="screen",
     )
 
-    easyarm_drag_controller_spawner = Node(
+    easyarm_freedrive_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
         arguments=[
-            "easyarm_drag_controller",
+            "easyarm_freedrive_controller",
             "--inactive",
             "--controller-manager-timeout",
             "30",
@@ -263,7 +263,7 @@ def generate_launch_description():
                     on_exit=[
                         arm_controller_spawner,
                         easyarm_servo_controller_spawner,
-                        easyarm_drag_controller_spawner,
+                        easyarm_freedrive_controller_spawner,
                     ],
                 )
             ),

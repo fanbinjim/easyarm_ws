@@ -229,7 +229,7 @@ effort source:
 ```text
 easyarm_controller
   EasyArmServoController
-  EasyArmDragController       # 已新增 inactive 原型
+  EasyArmFreedriveController       # 已新增，FREE_DRIVE 入口使用
   EasyArmTrajectoryController # 后续评估
 ```
 
@@ -244,10 +244,10 @@ easyarm_controller
    - `JointTrajectory` velocity 已传给 hardware；acceleration 已解析和缓存，后续可用于完整动力学 effort。
    - `effort` 当前为 controller feedforward effort，内容是 `gravity(q_target)`。
 
-2. `EasyArmDragController`
+2. `EasyArmFreedriveController`
    - 当前 `DRAG` 已在 hardware 中可用，正式行为先不替换。
-   - 已新增 inactive 原型，手动切 controller 测试 `kp=0`、`kd=drag_kd`、`effort=gravity(q) * drag_gravity_scale` 的拖拽手感。
-   - 只有完成 `MOVE/SERVO/DRAG` 双向切换和 safe shutdown 回归后，才考虑由 motion server 接管 DRAG controller。
+   - 已新增，并通过 `/easyarm/set_mode FREE_DRIVE` 进入，测试 `kp=0`、`kd=drag_kd`、`effort=gravity(q) * drag_gravity_scale` 的拖拽手感。
+   - 只有完成 `MOVE/SERVO/FREE_DRIVE` 双向切换和 safe shutdown 回归后，才考虑替换旧 hardware DRAG。
 
 3. `EasyArmTrajectoryController`
    - 当前 `MoveJ/MoveL` 使用 JTC 是合理的。
@@ -406,7 +406,7 @@ easyarm_move_task
 ### Short Term
 
 - 保持当前 `MoveJ/MoveL` 链路稳定。
-- 保持默认 `DRAG` 在 `easyarm_hardware` 内，避免影响已验证真机行为；`EasyArmDragController` inactive 原型已新增，后续先做手动切换真机验证。
+- 保持默认 `DRAG` 在 `easyarm_hardware` 内，避免影响已验证真机行为；`EasyArmFreedriveController` 已通过 `FREE_DRIVE` 测试入口接入。
 - 明确 `easyarm_a1_bringup` 是正式启动入口。
 - 不再向 `easyarm_move_task` 添加新正式功能。
 - 清理 `__pycache__`，并评估是否给 `ref/` 下外部 SDK 加 `COLCON_IGNORE`。
@@ -416,14 +416,14 @@ easyarm_move_task
 - `easyarm_motion_server` 已经封装 `SpeedJ/SpeedL/ServoJ/ServoL`，后续继续打磨状态上报和失败恢复。
 - `easyarm_app` 已经不再直接调用 MoveIt Servo 原生接口，后续保持 app 只调用 EasyArm 自己的接口。
 - 继续在真机低速环境验证 MoveIt Servo 输出到 `easyarm_servo_controller` 的边界行为，重点关注奇异点、碰撞缩放和 controller 切换。
-- 验证 `EasyArmDragController` inactive 原型，先手动切换测试，不改变默认 DRAG。
+- 验证 `/easyarm/set_mode FREE_DRIVE`，不改变默认 hardware DRAG。
 
 ### Long Term
 
 - 继续扩展 `easyarm_controller/EasyArmServoController`。
 - 将 SERVO 链路从当前 gravity-only effort 继续扩展到速度/加速度前馈和 full dynamics effort streaming controller。
 - 逐步把 gravity compensation、feedforward、impedance/admittance 从 hardware 层迁移到 controller 层。
-- 在 `EasyArmDragController` 原型真机验证通过后，再评估 `DRAG` 是否从 hardware 默认实现迁移到 controller。
+- 在 `EasyArmFreedriveController` 真机验证通过后，再评估 `DRAG` 是否从 hardware 默认实现迁移到 controller。
 
 ## Architecture Principles
 
@@ -431,7 +431,7 @@ easyarm_move_task
 
 - `MOVE`：单点或低频目标，走 MoveIt/Pilz + JTC。
 - `SERVO`：高频连续输入，当前走 MoveIt Servo + EasyArmServoController 完整关节运控 command，长期扩展到完整动力学 effort。
-- `DRAG`：默认保留 hardware；已新增 inactive `EasyArmDragController` 原型验证 controller 化可行性。
+- `DRAG`：默认保留 hardware；新增 `FREE_DRIVE` 入口验证 `EasyArmFreedriveController` controller 化可行性。
 - `easyarm_app`：只做用户入口，不直接碰硬件，不直接调用 MoveIt Servo 原生接口。
 - `easyarm_motion_server`：统一对外运动 API，负责模式协调和运动能力封装。
 - `easyarm_hardware`：长期只做硬件适配和最后安全边界；过渡期保留 gravity/DRAG 兼容逻辑。
