@@ -1,4 +1,11 @@
 <library path="easyarm_controller">
+  <class name="easyarm_controller/EasyArmDragController"
+         type="easyarm_controller::EasyArmDragController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      EasyArm controller-layer drag prototype with gravity feedforward and motor damping.
+    </description>
+  </class>
   <class name="easyarm_controller/EasyArmServoController"
          type="easyarm_controller::EasyArmServoController"
          base_class_type="controller_interface::ControllerInterface">

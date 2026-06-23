@@ -142,6 +142,20 @@ def generate_launch_description():
         output="screen",
     )
 
+    easyarm_drag_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            "easyarm_drag_controller",
+            "--inactive",
+            "--controller-manager-timeout",
+            "30",
+            "--service-call-timeout",
+            "30",
+        ],
+        output="screen",
+    )
+
     move_group = Node(
         package="moveit_ros_move_group",
         executable="move_group",
@@ -246,7 +260,11 @@ def generate_launch_description():
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=joint_state_broadcaster_spawner,
-                    on_exit=[arm_controller_spawner, easyarm_servo_controller_spawner],
+                    on_exit=[
+                        arm_controller_spawner,
+                        easyarm_servo_controller_spawner,
+                        easyarm_drag_controller_spawner,
+                    ],
                 )
             ),
             move_group,

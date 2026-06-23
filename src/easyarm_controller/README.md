@@ -2,15 +2,20 @@
 
 `easyarm_controller` 提供 EasyArm 自定义 `ros2_control` controller。
 
-当前第一版只包含：
+当前包含：
 
 ```text
+easyarm_controller/EasyArmDragController
 easyarm_controller/EasyArmServoController
 ```
 
-该 controller 用于 `SERVO` 链路，接收 MoveIt Servo 的 200Hz 流式输出。当前版本固定输出完整关节运控 command 接口：`position + velocity + kp + kd + effort`。其中 `position` 来自上游输入，`velocity` 来自 `JointTrajectory.velocities`，`kp/kd` 来自 controller 参数，`effort` 由 `gravity(q_target)` 计算得到。
+`EasyArmServoController` 用于 `SERVO` 链路，接收 MoveIt Servo 的 200Hz 流式输出。当前版本固定输出完整关节运控 command 接口：`position + velocity + kp + kd + effort`。其中 `position` 来自上游输入，`velocity` 来自 `JointTrajectory.velocities`，`kp/kd` 来自 controller 参数，`effort` 由 `gravity(q_target)` 计算得到。
+
+`EasyArmDragController` 是 DRAG controller 化的第一阶段原型。它不接收外部运动目标，只读取当前 joint position，并输出 `kp=0`、`velocity=0`、`kd=drag_kd`、`effort=gravity(q)`。默认只 inactive 加载，不替换当前 hardware 内已经真机可用的 `/easyarm/set_mode DRAG`。
 
 ## Controller
+
+### EasyArmServoController
 
 插件名：
 
@@ -48,7 +53,7 @@ easyarm_servo_controller:
     kd: 5.0
 ```
 
-当前 controller claim：
+当前 `EasyArmServoController` claim：
 
 ```text
 Joint1/position
@@ -91,7 +96,7 @@ Joint6/effort
 - `effort` 用于写入 controller feedforward effort。
 - `state_interfaces` 必须包含 `position`，可为后续扩展预留其他 state interface。
 
-当前 controller 读取：
+当前 `EasyArmServoController` 读取：
 
 ```text
 Joint1/position
@@ -208,6 +213,54 @@ easyarm_app
 
 `easyarm_motion_server` 负责在 `arm_controller` 和 `easyarm_servo_controller` 之间切换。不要手动同时激活这两个 controller。
 
+### EasyArmDragController
+
+插件名：
+
+```text
+easyarm_controller/EasyArmDragController
+```
+
+配置示例：
+
+```yaml
+easyarm_drag_controller:
+  type: easyarm_controller/EasyArmDragController
+
+easyarm_drag_controller:
+  ros__parameters:
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+      - Joint4
+      - Joint5
+      - Joint6
+    command_interfaces:
+      - position
+      - velocity
+      - kp
+      - kd
+      - effort
+    state_interfaces:
+      - position
+    enable_gravity_compensation: true
+    gravity_compensation_scale: 1.0
+    kd: 0.10
+```
+
+第一阶段原型输出：
+
+```text
+position = current joint position
+velocity = 0.0
+kp = 0.0
+kd = kd
+effort = gravity(current joint position) * gravity_compensation_scale
+```
+
+测试该 controller 时保持 hardware mode 为 `POSITION`，不要调用 `/easyarm/set_mode DRAG`。旧的 hardware `DRAG` 分支仍保留，真机稳定路径不变。
+
 ## Build
 
 ```bash
@@ -234,6 +287,7 @@ source install/setup.bash
 
 ```bash
 ros2 control list_controller_types | grep EasyArmServoController
+ros2 control list_controller_types | grep EasyArmDragController
 ```
 
 启动 mock：
@@ -254,6 +308,7 @@ ros2 control list_controllers
 joint_state_broadcaster active
 arm_controller active
 easyarm_servo_controller inactive
+easyarm_drag_controller inactive
 ```
 
 运行 SpeedJ：
@@ -285,13 +340,25 @@ ros2 control list_hardware_interfaces
 ros2 run easyarm_app easyarm stop
 ```
 
+测试 DragController 原型：
+
+```bash
+ros2 run easyarm_app easyarm set-mode POSITION
+ros2 control switch_controllers --deactivate arm_controller --activate easyarm_drag_controller --strict
+ros2 control list_hardware_interfaces
+ros2 control switch_controllers --deactivate easyarm_drag_controller --activate arm_controller --strict
+```
+
+`easyarm_drag_controller` active 时，`Joint*/position`、`Joint*/velocity`、`Joint*/kp`、`Joint*/kd`、`Joint*/effort` command interface 应被 claimed。该原型只用于验证 controller 层 DRAG 手感，暂不由 `easyarm_motion_server` 自动管理。
+
 ## Current Limitations
 
 - 当前版本写 `position + velocity + kp + kd + effort` command interface。
-- velocity command 第一版固定为 `0.0`，硬件仍暂时自行基于 position 差分生成实际电机 velocity feed-forward。
-- JointTrajectory velocity / acceleration 已解析和缓存，但暂未用于动力学前馈。
+- `EasyArmServoController` 会把 `JointTrajectory.velocities` 写给 hardware；`Float64MultiArray` 输入仍是 position-only，velocity 写 `0.0`。
+- JointTrajectory acceleration 已解析和缓存，但暂未用于动力学前馈。
 - feedforward effort 当前只包含 gravity，不计算完整 inverse dynamics。
-- `MoveJ/MoveL` 和 `DRAG` 仍依赖 `easyarm_hardware` 中现有 gravity compensation。
+- `MoveJ/MoveL` 仍依赖 `easyarm_hardware` 中现有 gravity compensation。
+- 默认 `DRAG` 仍保留在 `easyarm_hardware`，`EasyArmDragController` 只是 inactive 原型。
 - 不修改 motor ID、direction、offset、joint limit、CAN 参数、control gain 或 `use_mock_hardware` 默认值。
 
 后续如果要做完整动力学 controller，可以继续使用 `JointTrajectory` 中的 position / velocity / acceleration 生成更完整的 feedforward command。

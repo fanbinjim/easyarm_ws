@@ -58,7 +58,8 @@ MoveIt Servo 默认不启动。需要测试 `SpeedJ/SpeedL` 遥操时打开：
 ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=true
 ```
 
-启动后 `arm_controller` 仍保持 active，`easyarm_servo_controller` 只加载为 inactive。
+启动后 `arm_controller` 仍保持 active，`easyarm_servo_controller` 和
+`easyarm_drag_controller` 只加载为 inactive。
 `SpeedJ/SpeedL` 命令进入时由 `easyarm_motion_server` 自动切到
 `easyarm_servo_controller`，输入超时或 `/easyarm/stop` 后自动切回
 `arm_controller`。
@@ -101,6 +102,7 @@ ros2 control list_controllers
 joint_state_broadcaster active
 arm_controller active
 easyarm_servo_controller inactive
+easyarm_drag_controller inactive
 ```
 
 检查 motion server：
@@ -119,6 +121,23 @@ ros2 topic info /easyarm/speedl_cmd -v
 ros2 topic hz /easyarm_servo_controller/joint_trajectory
 ros2 topic echo /servo_node/status
 ```
+
+## Drag Controller Prototype
+
+`easyarm_drag_controller` 是第一阶段 DRAG controller 原型，默认 inactive，不替换
+当前已经真机可用的 hardware `DRAG`。
+
+测试时保持 hardware mode 为 `POSITION`，然后手动切 controller：
+
+```bash
+ros2 run easyarm_app easyarm set-mode POSITION
+ros2 control switch_controllers --deactivate arm_controller --activate easyarm_drag_controller --strict
+ros2 control list_hardware_interfaces
+ros2 control switch_controllers --deactivate easyarm_drag_controller --activate arm_controller --strict
+```
+
+不要用 `/easyarm/set_mode DRAG` 测这个原型；旧 hardware `DRAG` 分支会绕过
+controller full command source。
 
 ## Safe Shutdown
 

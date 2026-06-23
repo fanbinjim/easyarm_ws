@@ -49,6 +49,7 @@
   - 已在 `easyarm_hardware` 中实现。
   - 当前逻辑是 `kp=0`、`kd=drag_kd`、`velocity=0`、`torque=gravity(q) * drag_gravity_scale`。
   - 该功能已经真机可用，短期不迁移。
+  - 已新增 `easyarm_controller/EasyArmDragController` 第一阶段 inactive 原型，用于手动 controller 切换验证 controller 层拖拽手感。
 
 - Gravity compensation
   - 当前 `easyarm_hardware` 直接依赖 `easyarm_dynamics`。
@@ -236,7 +237,7 @@ effort / feedforward source:
 ```text
 easyarm_controller
   EasyArmServoController
-  EasyArmDragController       # 下一步做 inactive 原型
+  EasyArmDragController       # 已新增 inactive 原型
   EasyArmTrajectoryController # 后续评估
 ```
 
@@ -253,7 +254,8 @@ easyarm_controller
 
 2. `EasyArmDragController`
    - 迁移前保留 hardware 内现有 `DRAG`。
-   - 下一步可以开始做 inactive 原型，先通过手动 controller 切换真机验证。
+   - 已新增 inactive 原型，先通过手动 controller 切换真机验证。
+   - 第一阶段输出 `position=current`、`velocity=0`、`kp=0`、`kd=drag_kd`、`effort=gravity(q) * drag_gravity_scale`。
    - 原型稳定后，再评估是否由 motion server 接管 DRAG controller。
 
 3. `EasyArmTrajectoryController`
@@ -507,7 +509,7 @@ q_cmd += qd_cmd * dt
 
 ### Stage 5: EasyArmDragController 原型
 
-- 当前可以开始新增 `EasyArmDragController` 原型，但不要立即替换 hardware 内现有 `DRAG`。
+- 已新增 `EasyArmDragController` 原型，但不要立即替换 hardware 内现有 `DRAG`。
 - 第一阶段让 `easyarm_drag_controller` 默认 inactive，只通过 `ros2 control switch_controllers` 手动切换真机测试。
 - 目标行为对齐当前 hardware DRAG：`kp=0`、`kd=drag_kd`、`velocity=0`、`effort=gravity(q) * drag_gravity_scale`。
 - 验证 `MOVE -> DRAG`、`SERVO -> DRAG`、`DRAG -> MOVE/SERVO` 切换不会回跳、冲击或残留旧目标。

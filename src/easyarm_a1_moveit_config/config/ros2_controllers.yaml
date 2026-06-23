@@ -9,6 +9,9 @@ controller_manager:
     easyarm_servo_controller:
       type: easyarm_controller/EasyArmServoController
 
+    easyarm_drag_controller:
+      type: easyarm_controller/EasyArmDragController
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
@@ -52,3 +55,24 @@ easyarm_servo_controller:
     gravity_compensation_scale: 1.0
     kp: 120.0
     kd: 3.0
+
+easyarm_drag_controller:
+  ros__parameters:
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+      - Joint4
+      - Joint5
+      - Joint6
+    command_interfaces:
+      - position
+      - velocity
+      - kp
+      - kd
+      - effort
+    state_interfaces:
+      - position
+    enable_gravity_compensation: true
+    gravity_compensation_scale: 1.0
+    kd: 0.10
