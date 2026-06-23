@@ -1,26 +1,33 @@
 import argparse
 
 
+def _set_mode_value(value: str) -> str:
+    normalized = value.replace("-", "_").upper()
+    if normalized not in ("POSITION", "IDLE", "FREE_DRIVE"):
+        raise argparse.ArgumentTypeError("expected POSITION, IDLE, or FREE-DRIVE")
+    return normalized
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="EasyArm app CLI",
         epilog=(
             "examples:\n"
             "  movej 0.0025 0.25 2 0.1 -1.57 0.0\n"
-            "  list_named_state\n"
-            "  move_named_state ready\n"
-            "  speedj_teleop    # in easyarm_shell: keyboard JointJog mode\n"
+            "  list-named-state\n"
+            "  move-named-state ready\n"
+            "  speedj-teleop    # in easyarm_shell: keyboard JointJog mode\n"
             "  movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0\n"
             "  speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50\n"
             "  speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50\n"
             "  servoj 0 0.02 0 0 0 0 --duration 1.0 --rate 50\n"
-            "  servoj_teleop    # in easyarm_shell: keyboard ServoJ target mode\n"
+            "  servoj-teleop    # in easyarm_shell: keyboard ServoJ target mode\n"
             "  servol 0.25 0.0 0.25 0.0 0.0 0.0 1.0 --duration 1.0 --rate 50\n"
-            "  servol_teleop    # in easyarm_shell: keyboard ServoL target mode\n"
-            "  set-mode FREE_DRIVE\n"
+            "  servol-teleop    # in easyarm_shell: keyboard ServoL target mode\n"
+            "  set-mode FREE-DRIVE\n"
             "  set-mode POSITION\n"
-            "  speedl_teleop    # in easyarm_shell: keyboard Cartesian teleop mode\n"
-            "  ss               # in easyarm_shell: safe_shutdown alias"
+            "  speedl-teleop    # in easyarm_shell: keyboard Cartesian teleop mode\n"
+            "  ss               # in easyarm_shell: safe-shutdown alias"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -62,9 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     movel.set_defaults(execute=True)
 
     move_named_state = subparsers.add_parser(
-        "move_named_state",
+        "move-named-state",
         help="Call /easyarm/move_named_state using SRDF group_state",
-        epilog="examples:\n  move_named_state ready\n  move_named_state pose1 --plan-only",
+        epilog="examples:\n  move-named-state ready\n  move-named-state pose1 --plan-only",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     move_named_state.add_argument("name")
@@ -76,21 +83,19 @@ def build_parser() -> argparse.ArgumentParser:
     set_mode = subparsers.add_parser(
         "set-mode",
         help="Call /easyarm/set_mode",
-        epilog="examples:\n  set-mode FREE_DRIVE\n  set-mode POSITION",
+        epilog="examples:\n  set-mode FREE-DRIVE\n  set-mode POSITION",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     set_mode.add_argument(
         "mode",
-        choices=[
-            "POSITION", "IDLE", "FREE_DRIVE",
-            "position", "idle", "free_drive",
-        ],
+        type=_set_mode_value,
+        metavar="MODE",
     )
 
     subparsers.add_parser("stop", help="Call /easyarm/stop")
     subparsers.add_parser("get-state", help="Call /easyarm/get_state")
     subparsers.add_parser("get-joints", help="Call /easyarm/get_joints")
-    subparsers.add_parser("list_named_state", help="Call /easyarm/list_named_state")
+    subparsers.add_parser("list-named-state", help="Call /easyarm/list_named_state")
 
     get_pose = subparsers.add_parser("get-pose", help="Call /easyarm/get_pose")
     get_pose.add_argument("--target-frame", default="base_link")
@@ -152,29 +157,29 @@ def build_parser() -> argparse.ArgumentParser:
     servol.add_argument("--rate", type=float, default=50.0)
 
     subparsers.add_parser(
-        "speedj_teleop",
+        "speedj-teleop",
         help="Run keyboard SpeedJ teleoperation in easyarm_shell",
     )
 
     subparsers.add_parser(
-        "speedl_teleop",
+        "speedl-teleop",
         help="Run keyboard SpeedL teleoperation in easyarm_shell",
     )
 
     subparsers.add_parser(
-        "servoj_teleop",
+        "servoj-teleop",
         help="Run keyboard ServoJ target teleoperation in easyarm_shell",
     )
 
     subparsers.add_parser(
-        "servol_teleop",
+        "servol-teleop",
         help="Run keyboard ServoL target teleoperation in easyarm_shell",
     )
 
-    safe_shutdown = subparsers.add_parser("safe_shutdown", help="Run safe shutdown and exit shell")
+    safe_shutdown = subparsers.add_parser("safe-shutdown", help="Run safe shutdown and exit shell")
     safe_shutdown.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to safe_shutdown.sh")
 
-    ss = subparsers.add_parser("ss", help="Alias for safe_shutdown in easyarm_shell")
+    ss = subparsers.add_parser("ss", help="Alias for safe-shutdown in easyarm_shell")
     ss.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to safe_shutdown.sh")
 
     return parser

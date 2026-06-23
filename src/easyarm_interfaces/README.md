@@ -64,7 +64,7 @@ easyarm_interfaces/action/MoveNamedState
 ```text
 POSITION
 IDLE
-DRAG
+FREE_DRIVE
 ```
 
 ## 构建和检查

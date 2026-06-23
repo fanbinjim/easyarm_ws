@@ -71,13 +71,6 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
   if (params.count("idle_kd")) {
     idle_kd_ = std::clamp(parse_double_parameter(params.at("idle_kd"), idle_kd_), 0.0, 5.0);
   }
-  if (params.count("drag_gravity_scale")) {
-    drag_gravity_scale_ = std::clamp(
-      parse_double_parameter(params.at("drag_gravity_scale"), drag_gravity_scale_), 0.0, 1.0);
-  }
-  if (params.count("drag_kd")) {
-    drag_kd_ = std::clamp(parse_double_parameter(params.at("drag_kd"), drag_kd_), 0.0, 5.0);
-  }
   if (params.count("control_torque_limit_scale")) {
     control_torque_limit_scale_ = std::clamp(
       parse_double_parameter(params.at("control_torque_limit_scale"), control_torque_limit_scale_), 0.0, 1.0);
@@ -160,12 +153,10 @@ hardware_interface::CallbackReturn EasyArmHardware::on_init(const hardware_inter
     use_mock_hardware_ ? "true" : "false");
   RCLCPP_INFO(
     logger_,
-    "Gravity compensation: enabled=%s, position_scale=%.2f, idle_kd=%.2f, drag_scale=%.2f, drag_kd=%.2f, torque_limit_scale=%.2f, model_source=/robot_description",
+    "Gravity compensation: enabled=%s, position_scale=%.2f, idle_kd=%.2f, torque_limit_scale=%.2f, model_source=/robot_description",
     enable_gravity_compensation_ ? "true" : "false",
     gravity_compensation_scale_,
     idle_kd_,
-    drag_gravity_scale_,
-    drag_kd_,
     control_torque_limit_scale_);
   RCLCPP_INFO(logger_, "Initial hardware control mode: %s", hardware_control_mode_name(control_mode_));
   RCLCPP_INFO(logger_, "Desired motor control mode: %s", control_mode_name(desired_motor_mode_));
@@ -639,8 +630,7 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
   const bool position_uses_internal_gravity =
     control_mode_ == ControlMode::Position &&
     full_command_source_ == FullCommandSource::Hardware;
-  const bool mode_needs_gravity = position_uses_internal_gravity || control_mode_ == ControlMode::Drag;
-  const bool need_gravity_torque = mode_needs_gravity && enable_gravity_compensation_ && robot_model_ &&
+  const bool need_gravity_torque = position_uses_internal_gravity && enable_gravity_compensation_ && robot_model_ &&
     active_motor_mode_ == MotorControlMode::MotionControl;
   bool gravity_torque_available = need_gravity_torque;
   if (gravity_torque_available) {
@@ -674,24 +664,19 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
     const auto & config = joint_configs_[i];
     const auto motor_params = getMotorParams(config.motor_type);
 
-    if (control_mode_ == ControlMode::Idle || control_mode_ == ControlMode::Drag) {
+    if (control_mode_ == ControlMode::Idle) {
       const double motor_position = hw_positions_[i] * config.direction + config.position_offset;
       const double clamped_motor_position = std::clamp(motor_position, motor_params.p_min, motor_params.p_max);
-      const double joint_torque = control_mode_ == ControlMode::Drag && gravity_torque_available ?
-        gravity_torques_[static_cast<Eigen::Index>(i)] * drag_gravity_scale_ : 0.0;
-      const double max_torque = motor_params.t_max * control_torque_limit_scale_;
-      const double command_torque = std::clamp(joint_torque * config.direction, -max_torque, max_torque);
-      const double command_kd = control_mode_ == ControlMode::Drag ? drag_kd_ : idle_kd_;
 
-      // IDLE 是纯阻尼模式；DRAG 的 torque 只放 gravity 项，阻尼交给电机 velocity/kd 字段处理。
+      // IDLE 是纯阻尼模式；拖拽由 EasyArmFreedriveController 负责。
       const bool command_sent = can_driver_->sendMotionControl(
         config.motor_id,
         config.motor_type,
         clamped_motor_position,
         0.0,
         0.0,
-        command_kd,
-        command_torque);
+        idle_kd_,
+        0.0);
       if (!command_sent) {
         static int warn_counter = 0;
         if (warn_counter++ % 1000 == 0) {
@@ -704,9 +689,9 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
           i,
           clamped_motor_position,
           0.0,
-          command_torque,
           0.0,
-          command_kd,
+          0.0,
+          idle_kd_,
           command_sent);
       }
 
@@ -916,10 +901,6 @@ bool EasyArmHardware::try_parse_hardware_control_mode(const std::string & value,
     mode = ControlMode::Position;
     return true;
   }
-  if (value == "drag" || value == "DRAG") {
-    mode = ControlMode::Drag;
-    return true;
-  }
   return false;
 }
 
@@ -928,8 +909,6 @@ const char * EasyArmHardware::hardware_control_mode_name(ControlMode mode) const
   switch (mode) {
     case ControlMode::Idle:
       return "IDLE";
-    case ControlMode::Drag:
-      return "DRAG";
     case ControlMode::Position:
     default:
       return "POSITION";
@@ -1075,14 +1054,14 @@ rcl_interfaces::msg::SetParametersResult EasyArmHardware::on_control_mode_parame
 
     if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_STRING) {
       result.successful = false;
-      result.reason = "controller_mode must be a string: IDLE, POSITION, or DRAG";
+      result.reason = "controller_mode must be a string: IDLE or POSITION";
       return result;
     }
 
     ControlMode mode{ControlMode::Position};
     if (!try_parse_hardware_control_mode(parameter.as_string(), mode)) {
       result.successful = false;
-      result.reason = "Unknown controller_mode. Expected IDLE, POSITION, or DRAG";
+      result.reason = "Unknown controller_mode. Expected IDLE or POSITION";
       return result;
     }
 
@@ -1100,15 +1079,7 @@ rcl_interfaces::msg::SetParametersResult EasyArmHardware::on_control_mode_parame
 bool EasyArmHardware::request_control_mode(ControlMode mode, std::string & message)
 {
   if (mode != ControlMode::Position && active_motor_mode_ != MotorControlMode::MotionControl) {
-    message = "IDLE/DRAG require motion_control motor mode";
-    return false;
-  }
-  if (mode == ControlMode::Drag && !enable_gravity_compensation_) {
-    message = "DRAG requires enable_gravity_compensation=true";
-    return false;
-  }
-  if (mode == ControlMode::Drag && !robot_model_) {
-    message = "DRAG requires loaded dynamics model";
+    message = "IDLE requires motion_control motor mode";
     return false;
   }
 

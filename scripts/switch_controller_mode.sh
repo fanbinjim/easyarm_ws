@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 #
 # Usage:
-#   ./scripts/switch_controller_mode.sh <IDLE|POSITION|DRAG>
+#   ./scripts/switch_controller_mode.sh <IDLE|POSITION>
 #
 # Examples:
 #   ./scripts/switch_controller_mode.sh IDLE
-#   ./scripts/switch_controller_mode.sh DRAG
 #   ./scripts/switch_controller_mode.sh POSITION
+#   ros2 run easyarm_app easyarm set-mode FREE_DRIVE
 #
 # Notes:
 #   IDLE     Pure damping mode.
-#   DRAG     Gravity-compensated drag mode.
 #   POSITION Normal trajectory/position mode. The underlying tool first sends
 #            a hold trajectory at the current joint positions before switching.
+#   FREE_DRIVE is controller-layer freedrive; use easyarm_app instead of this
+#              hardware-mode wrapper.
 #
 # This wrapper enters the workspace, sources install/setup.bash when present,
 # and forwards the mode to:
@@ -36,10 +37,10 @@ fi
 
 MODE="${1^^}"
 case "${MODE}" in
-  IDLE|POSITION|DRAG)
+  IDLE|POSITION)
     ;;
   *)
-    printf 'Error: unknown mode "%s". Expected IDLE, POSITION, or DRAG.\n\n' "$1" >&2
+    printf 'Error: unknown mode "%s". Expected IDLE or POSITION. Use "ros2 run easyarm_app easyarm set-mode FREE_DRIVE" for freedrive.\n\n' "$1" >&2
     usage >&2
     exit 1
     ;;

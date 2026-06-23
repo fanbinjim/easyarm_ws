@@ -30,11 +30,11 @@ easyarm_shell 执行文件同目录下的 .easyarm_shell_history
 ```text
 easyarm> get-joints
 easyarm> get-pose
-easyarm> list_named_state
+easyarm> list-named-state
 easyarm> movej 0 0 2.35619 0.7854 -1.5708 0 --plan-only
-easyarm> move_named_state ready --plan-only
-easyarm> speedj_teleop
-easyarm> speedl_teleop
+easyarm> move-named-state ready --plan-only
+easyarm> speedj-teleop
+easyarm> speedl-teleop
 easyarm> exit
 ```
 
@@ -43,17 +43,17 @@ easyarm> exit
 ```text
 movej
 movel
-move_named_state
+move-named-state
 set-mode
 stop
 get-state
 get-joints
 get-pose
-list_named_state
+list-named-state
 speedj
 speedl
-speedj_teleop
-speedl_teleop
+speedj-teleop
+speedl-teleop
 ```
 
 ## 测试前启动
@@ -118,14 +118,14 @@ ros2 run easyarm_app easyarm movej 0 0 2.35619 0.7854 -1.5708 0 \
 查看 SRDF 预设 named state：
 
 ```bash
-ros2 run easyarm_app easyarm list_named_state
+ros2 run easyarm_app easyarm list-named-state
 ```
 
 运动到 SRDF 预设 named state：
 
 ```bash
-ros2 run easyarm_app easyarm move_named_state ready --plan-only
-ros2 run easyarm_app easyarm move_named_state ready \
+ros2 run easyarm_app easyarm move-named-state ready --plan-only
+ros2 run easyarm_app easyarm move-named-state ready \
   --velocity-scale 0.2 \
   --acceleration-scale 0.2
 ```
@@ -149,7 +149,7 @@ ros2 run easyarm_app easyarm movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0 --plan-only
 ```bash
 ros2 run easyarm_app easyarm set-mode POSITION
 ros2 run easyarm_app easyarm set-mode IDLE
-ros2 run easyarm_app easyarm set-mode FREE_DRIVE
+ros2 run easyarm_app easyarm set-mode FREE-DRIVE
 ```
 
 停止：
@@ -202,10 +202,10 @@ ros2 run easyarm_app easyarm_task1 \
 
 ## 键盘 SpeedJ 模式
 
-`easyarm_shell` 中输入 `speedj_teleop` 会进入键盘关节速度控制模式：
+`easyarm_shell` 中输入 `speedj-teleop` 会进入键盘关节速度控制模式：
 
 ```text
-easyarm> speedj_teleop
+easyarm> speedj-teleop
 ```
 
 按键映射：
@@ -216,7 +216,7 @@ q w e r t y  -> Joint1..Joint6 负方向速度
 Esc          -> 退出并发送零速度
 ```
 
-`speedj_teleop` 和 `speedl_teleop` 使用 Linux input event 读取真实按下/松开事件，不依赖终端字符连发。按住按键时速度会缓慢增加；松开后速度会快速回零，但不会瞬间归零。
+`speedj-teleop` 和 `speedl-teleop` 使用 Linux input event 读取真实按下/松开事件，不依赖终端字符连发。按住按键时速度会缓慢增加；松开后速度会快速回零，但不会瞬间归零。
 
 如果系统没有安装依赖：
 
@@ -232,10 +232,10 @@ EASYARM_KEYBOARD_DEVICE=/dev/input/eventX ros2 run easyarm_app easyarm_shell
 
 ## 键盘 SpeedL 模式
 
-`easyarm_shell` 中输入 `speedl_teleop` 会进入键盘末端速度控制模式：
+`easyarm_shell` 中输入 `speedl-teleop` 会进入键盘末端速度控制模式：
 
 ```text
-easyarm> speedl_teleop
+easyarm> speedl-teleop
 ```
 
 平移按键映射：

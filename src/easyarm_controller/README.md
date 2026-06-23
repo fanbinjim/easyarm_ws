@@ -11,7 +11,7 @@ easyarm_controller/EasyArmServoController
 
 `EasyArmServoController` 用于 `SERVO` 链路，接收 MoveIt Servo 的 200Hz 流式输出。当前版本固定输出完整关节运控 command 接口：`position + velocity + kp + kd + effort`。其中 `position` 来自上游输入，`velocity` 来自 `JointTrajectory.velocities`，`kp/kd` 来自 controller 参数，`effort` 由 `gravity(q_target)` 计算得到。
 
-`EasyArmFreedriveController` 是 `FREE_DRIVE` 控制模式的第一阶段 controller。它不接收外部运动目标，只读取当前 joint position，并输出 `kp=0`、`velocity=0`、`kd`、`effort=gravity(q)`。默认只 inactive 加载，不替换当前 hardware 内已经真机可用的 `/easyarm/set_mode DRAG`。
+`EasyArmFreedriveController` 是 `FREE_DRIVE` 控制模式的第一阶段 controller。它不接收外部运动目标，只读取当前 joint position，并输出 `kp=0`、`velocity=0`、`kd`、`effort=gravity(q)`。默认 inactive 加载，由 `/easyarm/set_mode FREE_DRIVE` 切换进入。
 
 ## Controller
 
@@ -259,7 +259,7 @@ kd = kd
 effort = gravity(current joint position) * gravity_compensation_scale
 ```
 
-测试该 controller 时调用 `/easyarm/set_mode FREE_DRIVE`。motion server 会保持 hardware mode 为 `POSITION`，并切换到 `easyarm_freedrive_controller`。旧的 hardware `DRAG` 分支仍保留，真机稳定路径不变。
+测试该 controller 时调用 `/easyarm/set_mode FREE_DRIVE`。motion server 会保持 hardware mode 为 `POSITION`，并切换到 `easyarm_freedrive_controller`。旧 hardware `DRAG` 模式已经从 `easyarm_hardware` 删除。
 
 ## Build
 
@@ -357,7 +357,6 @@ ros2 run easyarm_app easyarm set-mode POSITION
 - JointTrajectory acceleration 已解析和缓存，但暂未用于动力学前馈。
 - feedforward effort 当前只包含 gravity，不计算完整 inverse dynamics。
 - `MoveJ/MoveL` 仍依赖 `easyarm_hardware` 中现有 gravity compensation。
-- 默认 `DRAG` 仍保留在 `easyarm_hardware`，`FREE_DRIVE` 使用 `EasyArmFreedriveController` 作为过渡测试入口。
 - 不修改 motor ID、direction、offset、joint limit、CAN 参数、control gain 或 `use_mock_hardware` 默认值。
 
 后续如果要做完整动力学 controller，可以继续使用 `JointTrajectory` 中的 position / velocity / acceleration 生成更完整的 feedforward command。

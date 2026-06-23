@@ -93,7 +93,7 @@ easyarm_app
 - 无效输入，例如缺少关节、数组长度不对或出现非有限数值时，只 warn 并保持上一条有效 command。
 - 如果后续希望给电机同时提供目标位置、前馈速度和完整动力学 effort，可以在自定义 controller 内继续使用已缓存的 velocity / acceleration。
 - 当前 `easyarm_hardware` 在 JTC/MOVE 路径内仍会做内部重力补偿和速度前馈；SERVO 路径下会根据 claimed `kp/kd` command interface 使用 controller full command。
-- `SpeedJ/SpeedL` 的上层 control mode 已经是 `SERVO`，但底层 hardware mode 仍沿用历史 `POSITION/IDLE/DRAG` 分层；其中 `DRAG` 已不再作为 motion server 对外入口。
+- `SpeedJ/SpeedL` 的上层 control mode 已经是 `SERVO`，底层 hardware mode 已收敛到 `POSITION/IDLE`；拖拽统一走 controller 层 `FREE_DRIVE`。
 
 后续目标链路仍然是：
 
@@ -135,7 +135,7 @@ easyarm_app
 - CAN 驱动初始化和反馈读取
 - command/state interface 暴露
 - 电机 enable / disable / mode switch
-- `IDLE/POSITION/DRAG` 模式管理
+- `IDLE/POSITION` 模式管理
 - 重力补偿
 - velocity feedforward
 - command smoothing/filter
@@ -143,11 +143,11 @@ easyarm_app
 
 这里的关键问题不是单个 `.cpp` 文件超过 1000 行，而是 hardware 层承担了控制算法职责。
 
-短期保留是合理的，因为：
+当前仍保留部分控制算法是出于兼容考虑：
 
-- `DRAG` 已经真机可用。
-- 重力补偿已经服务于当前拖拽手感。
-- 贸然迁移会影响安全和稳定性。
+- `MoveJ/MoveL` 仍使用 JTC，需要 hardware 内部 gravity compensation 服务 MOVE 链路。
+- velocity feedforward 和 command smoothing 仍在 hardware 内，后续需要继续上提。
+- 拖拽已迁移到 `EasyArmFreedriveController`，旧 hardware `DRAG` 已删除。
 
 长期边界应调整为：
 
@@ -217,9 +217,9 @@ effort source:
 
 这意味着 hardware 在中间阶段需要同时兼容：
 
-- 旧链路：`MoveJ/MoveL/DRAG` 依赖 hardware 内部 gravity / damping。
-- 新链路：`SpeedJ/SpeedL/ServoJ/ServoL` 已经进入 controller 层实时控制主线。
-- 新 freedrive 链路：`FREE_DRIVE` 已经通过 `EasyArmFreedriveController` 进入 controller 层。
+- 旧 MOVE 链路：`MoveJ/MoveL` 依赖 hardware 内部 gravity compensation。
+- 新 SERVO 链路：`SpeedJ/SpeedL/ServoJ/ServoL` 已经进入 controller 层实时控制主线。
+- 新 FREE_DRIVE 链路：`FREE_DRIVE` 已经通过 `EasyArmFreedriveController` 进入 controller 层。
 
 这种过渡复杂度是合理的，但应在代码和文档中明确标记为临时兼容层，避免继续把上层 `SERVO`、`MOVE` 等概念塞进 hardware。
 
@@ -248,7 +248,7 @@ easyarm_controller
 2. `EasyArmFreedriveController`
    - 已新增，并通过 `/easyarm/set_mode FREE_DRIVE` 进入，测试 `kp=0`、`kd=drag_kd`、`effort=gravity(q) * drag_gravity_scale` 的拖拽手感。
    - `/easyarm/set_mode DRAG` 已废弃，对外统一使用 `FREE_DRIVE`。
-   - 旧 hardware `DRAG` 分支暂时作为内部兼容路径保留，只有完成更多 `MOVE/SERVO/FREE_DRIVE` 双向切换和 safe shutdown 回归后，才考虑删除。
+   - 旧 hardware `DRAG` 已删除，拖拽统一走 `FREE_DRIVE` controller。
 
 3. `EasyArmTrajectoryController`
    - 当前 `MoveJ/MoveL` 使用 JTC 是合理的。
@@ -407,7 +407,7 @@ easyarm_move_task
 ### Short Term
 
 - 保持当前 `MoveJ/MoveL` 链路稳定。
-- 对外统一使用 `FREE_DRIVE`；旧 hardware `DRAG` 暂时保留为内部兼容路径，避免影响已验证真机行为。
+- 对外统一使用 `FREE_DRIVE`；旧 hardware `DRAG` 已删除，拖拽统一走 `FREE_DRIVE` controller。
 - 明确 `easyarm_a1_bringup` 是正式启动入口。
 - 不再向 `easyarm_move_task` 添加新正式功能。
 - 清理 `__pycache__`，并评估是否给 `ref/` 下外部 SDK 加 `COLCON_IGNORE`。
@@ -417,14 +417,14 @@ easyarm_move_task
 - `easyarm_motion_server` 已经封装 `SpeedJ/SpeedL/ServoJ/ServoL`，后续继续打磨状态上报和失败恢复。
 - `easyarm_app` 已经不再直接调用 MoveIt Servo 原生接口，后续保持 app 只调用 EasyArm 自己的接口。
 - 继续在真机低速环境验证 MoveIt Servo 输出到 `easyarm_servo_controller` 的边界行为，重点关注奇异点、碰撞缩放和 controller 切换。
-- 验证 `/easyarm/set_mode FREE_DRIVE`，并保持旧 hardware DRAG 仅作为内部兼容路径。
+- 继续验证 `/easyarm/set_mode FREE_DRIVE`，确认 controller 切换、stop 和 safe shutdown 长期稳定。
 
 ### Long Term
 
 - 继续扩展 `easyarm_controller/EasyArmServoController`。
 - 将 SERVO 链路从当前 gravity-only effort 继续扩展到速度/加速度前馈和 full dynamics effort streaming controller。
 - 逐步把 gravity compensation、feedforward、impedance/admittance 从 hardware 层迁移到 controller 层。
-- 在 `EasyArmFreedriveController` 真机验证通过后，再评估何时删除 hardware 内旧 `DRAG` 分支。
+- 旧 hardware `DRAG` 已删除；后续继续验证 `FREE_DRIVE` 的长期稳定性。
 
 ## Architecture Principles
 
@@ -432,9 +432,9 @@ easyarm_move_task
 
 - `MOVE`：单点或低频目标，走 MoveIt/Pilz + JTC。
 - `SERVO`：高频连续输入，当前走 MoveIt Servo + EasyArmServoController 完整关节运控 command，长期扩展到完整动力学 effort。
-- `FREE_DRIVE`：对外统一使用 controller 入口；旧 hardware `DRAG` 暂时仅作为内部兼容路径。
+- `FREE_DRIVE`：对外统一使用 controller 入口；旧 hardware `DRAG` 已删除。
 - `easyarm_app`：只做用户入口，不直接碰硬件，不直接调用 MoveIt Servo 原生接口。
 - `easyarm_motion_server`：统一对外运动 API，负责模式协调和运动能力封装。
-- `easyarm_hardware`：长期只做硬件适配和最后安全边界；过渡期保留 gravity/DRAG 兼容逻辑。
+- `easyarm_hardware`：长期只做硬件适配和最后安全边界；过渡期保留 MOVE 所需 gravity 兼容逻辑。
 - `easyarm_dynamics`：只做动力学计算，不包含控制策略。
 - `easyarm_a1_bringup`：负责系统启动编排。

@@ -40,8 +40,7 @@ enum class MotorControlMode
 enum class ControlMode
 {
   Idle = 0,
-  Position = 1,
-  Drag = 2
+  Position = 1
 };
 
 enum class FullCommandSource
@@ -164,8 +163,6 @@ private:
   bool enable_gravity_compensation_{false};
   double gravity_compensation_scale_{1.0};
   double idle_kd_{4.0};
-  double drag_gravity_scale_{1.0};
-  double drag_kd_{1.0};
   double control_torque_limit_scale_{0.5};
   bool use_mock_hardware_{false};
   DebugLoggerConfig debug_logger_config_;

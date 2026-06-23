@@ -47,7 +47,7 @@ max_joint_state_age=0.5
 
 `SpeedJ/SpeedL` 使用流式 topic 输入。收到 `/easyarm/speedj_cmd` 或 `/easyarm/speedl_cmd` 后，motion server 会在硬件模式为 `POSITION` 时自动切换到 `easyarm_servo_controller`，启动 MoveIt Servo，并转发命令到 `/servo_node/delta_joint_cmds` 或 `/servo_node/delta_twist_cmds`。输入超时或调用 `/easyarm/stop` 后，会发送 zero command 并切回 `arm_controller`。
 
-历史说明：当前 `/easyarm/set_mode` 和 `/easyarm/get_state.mode` 仍主要封装 `easyarm_hardware` 的 hardware mode，其中 `FREE_DRIVE` 是过渡期新增的 controller 层模式。旧 hardware `DRAG` 分支暂时只作为内部兼容路径保留，不再作为对外 motion server 接口。
+历史说明：当前 `/easyarm/set_mode` 和 `/easyarm/get_state.mode` 仍主要封装 `easyarm_hardware` 的 hardware mode，其中 `FREE_DRIVE` 是过渡期新增的 controller 层模式。旧 hardware `DRAG` 模式已经删除，不再作为对外 motion server 接口。
 
 第一版不封装 ServoJ/ServoL。
 

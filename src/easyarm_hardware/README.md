@@ -1,31 +1,24 @@
 # easyarm_hardware
 
-## 控制模式切换
+## 控制模式边界
 
-`easyarm_hardware` 当前在 `hardware_interface` 内提供临时模式切换参数，后续会将控制逻辑上提到独立 `easyarm_controller`。
-
-可用模式：
+`easyarm_hardware` 是 ros2_control `SystemInterface`，现在只保留硬件层必要模式：
 
 - `IDLE`：纯阻尼模式，`kp=0`，`kd=idle_kd`，`velocity=0`，`tau=0`。
-- `POSITION`：正常 MoveIt + `JointTrajectoryController` 轨迹跟踪，在位置控制基础上叠加重力补偿。
-- `DRAG`：拖拽示教模式，`kp=0`，`kd=drag_kd`，`velocity=0`，`tau=gravity(q) * drag_gravity_scale`。
+- `POSITION`：正常控制模式，服务 `MoveJ/MoveL` 的 JTC 链路，以及 controller 层 `FREE_DRIVE` / `SERVO` 链路。
 
-切换命令（推荐）：
+旧 hardware `DRAG` 模式已经删除。拖拽请使用 controller 层入口：
 
 ```bash
-ros2 run easyarm_move_task switch_controller_mode IDLE
-ros2 run easyarm_move_task switch_controller_mode POSITION
-ros2 run easyarm_move_task switch_controller_mode DRAG
+ros2 run easyarm_app easyarm set-mode FREE_DRIVE
+ros2 run easyarm_app easyarm set-mode POSITION
 ```
 
-`switch_controller_mode` 在切到 `POSITION` 时会先将当前 `/joint_states` 位置发给 `arm_controller` 作为 hold trajectory，避免切回后机械臂回旧目标。
-
-底层参数切换（备选）：
+底层参数切换只用于硬件层调试：
 
 ```bash
 ros2 param set /easyarm_hardware_control_mode controller_mode IDLE
 ros2 param set /easyarm_hardware_control_mode controller_mode POSITION
-ros2 param set /easyarm_hardware_control_mode controller_mode DRAG
 ```
 
 查询当前请求模式：
@@ -34,25 +27,15 @@ ros2 param set /easyarm_hardware_control_mode controller_mode DRAG
 ros2 param get /easyarm_hardware_control_mode controller_mode
 ```
 
-`controller_mode` 参数表示请求的控制模式；实际切换在下一次 hardware `write()` 中应用。
+`controller_mode` 参数表示 hardware 层请求模式；实际切换在下一次 hardware `write()` 中应用。`DRAG` 不再是合法 hardware mode。
 
-实机调试建议先进入 `IDLE` 确认纯阻尼手感，再进入 `DRAG`。切回 `POSITION` 时，hardware 会将命令同步到当前关节位置，降低回弹风险。
-
-`DRAG` 需要满足：
-
-- 底层电机模式为 `motion_control`。
-- `enable_gravity_compensation=true`。
-- `RobotModel` 已经从 `/robot_description` topic 成功加载。
-
-相关参数在 `src/easyarm_a1_moveit_config/config/easyarm_a1.ros2_control.xacro`：
+相关硬件参数在 `src/easyarm_a1_moveit_config/config/easyarm_a1.ros2_control.xacro`：
 
 ```xml
 <param name="hardware_control_mode">position</param>
 <param name="gravity_compensation_scale">1.0</param>
 <param name="idle_kd">4.0</param>
-<param name="drag_gravity_scale">0.2</param>
-<param name="drag_kd">1.0</param>
-<param name="control_torque_limit_scale">0.5</param>
+<param name="control_torque_limit_scale">1.0</param>
 ```
 
 `urdf_path` 兼容字段暂时保留在 ros2_control xacro 中，但 hardware 生产链路不再用它加载动力学模型。启用重力补偿时，hardware 只从 `/robot_description` 获取 URDF XML；如果超时获取失败，configure 会失败。
@@ -60,8 +43,8 @@ ros2 param get /easyarm_hardware_control_mode controller_mode
 `POSITION` 模式下 full command 来源由 ros2_control command interface 自动判断，不提供外部参数：
 
 - `arm_controller` 未 claim `kp/kd` command interface 时，使用 hardware 内部 velocity feed-forward、kp/kd 和 `gravity(q)`。
-- `easyarm_servo_controller` claim `kp/kd` command interface 时，使用 controller 写入的 `kp/kd/effort`；velocity command 当前保留占位，实际电机 velocity feed-forward 仍由 hardware 基于 position 差分生成。
-- `DRAG` 始终使用 hardware 内部 gravity + damping，不受 controller full command 影响。
+- `easyarm_servo_controller` 或 `easyarm_freedrive_controller` claim `kp/kd` command interface 时，使用 controller 写入的 `kp/kd/effort`。
+- `FREE_DRIVE` 的重力补偿和阻尼由 `easyarm_freedrive_controller` 输出完整 command，hardware 只负责透传、方向/offset、限幅和 CAN 发送。
 
 ## 250Hz 调试日志
 
@@ -115,7 +98,7 @@ python3 src/easyarm_hardware/scripts/decode_debug_log.py \
 
 ## TODO
 
-- 当前 `IDLE`、`POSITION`、`DRAG` 控制逻辑直接写在 `easyarm_hardware` 中，与硬件接口耦合较大，仅作为真机调试和快速验证的临时方案。
-- `SERVO` 链路已经开始由 `easyarm_servo_controller` 写入完整 command：`position + velocity + kp + kd + effort`；当前 velocity 为占位，effort 内容是 gravity feedforward。`MoveJ/MoveL` 和 `DRAG` 仍保留 hardware 内部重力补偿。
-- 待拖拽模式、重力补偿和模式切换稳定后，将更多控制模式管理、阻尼控制上提到独立 `easyarm_controller`。
-- 长期目标是让 `easyarm_hardware` 只保留硬件读写、安全限幅和底层状态同步，控制策略由 controller 层负责。
+- `IDLE` 和 `POSITION` 仍直接写在 `easyarm_hardware` 中；长期目标是让 hardware 只保留硬件读写、安全限幅和底层状态同步。
+- `SERVO` 和 `FREE_DRIVE` 已经由 `easyarm_controller` 写入完整 command：`position + velocity + kp + kd + effort`。
+- `MoveJ/MoveL` 仍通过 JTC 进入 hardware `POSITION` 链路，hardware 内部重力补偿暂时保留以服务 MOVE。
+- 后续继续把重力补偿、阻尼控制、速度/加速度前馈逐步上提到 controller 层。

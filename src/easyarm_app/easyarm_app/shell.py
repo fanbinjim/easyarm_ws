@@ -59,19 +59,19 @@ def shell_main() -> None:
             if line in ("help", "?"):
                 parser.print_help()
                 continue
-            if line == "speedj_teleop":
+            if line == "speedj-teleop":
                 node.run_speedj_teleop()
                 continue
-            if line == "speedl_teleop":
+            if line == "speedl-teleop":
                 node.run_speedl_teleop()
                 continue
-            if line == "servoj_teleop":
+            if line == "servoj-teleop":
                 node.run_servoj_teleop()
                 continue
-            if line == "servol_teleop":
+            if line == "servol-teleop":
                 node.run_servol_teleop()
                 continue
-            if line in ("safe_shutdown", "ss") or line.startswith("safe_shutdown ") or line.startswith("ss "):
+            if line in ("safe-shutdown", "ss") or line.startswith("safe-shutdown ") or line.startswith("ss "):
                 try:
                     extra_args = shlex.split(line)[1:]
                 except ValueError as exception:

@@ -136,7 +136,7 @@ ros2 run easyarm_app easyarm set-mode POSITION
 ```
 
 `/easyarm/set_mode DRAG` 已废弃，对外请统一使用 `FREE_DRIVE`。旧 hardware
-`DRAG` 分支仅作为内部兼容路径暂时保留。
+`DRAG` 模式已经从 `easyarm_hardware` 删除。
 
 ## Safe Shutdown
 
