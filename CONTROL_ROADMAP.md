@@ -9,7 +9,7 @@
 - `DRAG`、`MOVE`、`SERVO` 应作为平级 robot control mode。
 - `MoveJ/MoveL` 属于 `MOVE`，输入是单点或低频目标，继续适合使用 JTC。
 - `SpeedJ/SpeedL` 属于 `SERVO`，输入是高频连续速度命令，不应继续沿 JTC 路线打磨。
-- `ServoJ/ServoL` 尚未实现，后续也应归入 `SERVO`，走实时链路。
+- `ServoJ/ServoL` 已实现第一版位置伺服，归入 `SERVO`，通过 motion server 转换为 MoveIt Servo 速度输入。
 - `easyarm_hardware` 长期应变轻，只保留硬件适配、CAN 协议、方向/offset/限幅、安全保护、状态反馈和硬件模式管理。
 - 重力补偿和更高级的动力学控制长期应迁移到自定义 `ros2_control` controller，由 controller 调用 `easyarm_dynamics`。
 
@@ -32,15 +32,18 @@
   - `easyarm_servo_controller` 是 `easyarm_controller/EasyArmServoController`。
   - `publish_period` 当前配置为 `0.005s`，目标是 200Hz 流式输出。
   - MoveIt Servo 在 Humble 的 `Float64MultiArray` 输出模式要求 position 或 velocity 二选一；因此默认链路改用 `JointTrajectory`，同时输出 position / velocity / acceleration。
-  - `easyarm_servo_controller` 当前把 `position + velocity + kp + kd + effort` 写给 hardware；velocity 第一版固定为 `0.0`，controller effort 目前只包含 gravity feedforward。
+  - `easyarm_servo_controller` 当前把 `position + velocity + kp + kd + effort` 写给 hardware；`JointTrajectory` 输入带 velocity 时会继续传给 hardware，controller effort 目前只包含 gravity feedforward。
   - `easyarm_servo_controller` 同时保留 `/easyarm_servo_controller/joint_positions` 作为 `Float64MultiArray` position-only 兼容输入。
   - `EasyArmServoController` 激活时用当前 joint state 初始化 hold position；输入 timeout 后保持上一条有效 position，不清零。
-  - 该链路已在虚拟/仿真环境验证正常，尚未做真机测试。
-  - 当前 velocity command 只作为接口占位，实际电机 velocity feed-forward 仍暂时由 hardware 差分生成；effort 先实现为 `gravity(q_target)`，后续可继续扩展为完整动力学前馈。
+  - 该链路已完成真机测试，`SpeedJ/SpeedL/ServoJ/ServoL` 基本可用；ServoL 在奇异点附近仍会受 MoveIt Servo 降速保护影响。
+  - 当前 velocity command 已在 `JointTrajectory` 输入带 velocity 时传递到 hardware；effort 先实现为 `gravity(q_target)`，后续可继续扩展为完整动力学前馈。
 
 - `ServoJ/ServoL`
-  - 尚未实现。
-  - 后续不建议继续使用 JTC 单点短轨迹方式实现。
+  - 已实现第一版。
+  - `ServoJ` 接收关节位置目标，经 `PositionServoExecutor` 转换为 `JointJog`。
+  - `ServoL` 接收末端位姿目标，经 `PositionServoExecutor` 转换为 `TwistStamped`。
+  - 二者继续复用 MoveIt Servo 的碰撞、奇异点、joint limit 缩放和 controller 切换链路。
+  - `ServoL` 当前不保证严格直线；严格直线仍使用 `MoveL`。
 
 - `DRAG`
   - 已在 `easyarm_hardware` 中实现。
@@ -131,10 +134,10 @@ SERVO:
    - 如果后续不用自定义 controller，需要验证 Humble 版本的参数格式、命令数组 layout，以及 6 个关节双接口映射是否稳定。
 
 2. `easyarm_controller/EasyArmServoController`
-   - 已经实现 `position + velocity + kp + kd + effort` 完整 command，当前 velocity 为 0 占位，effort 内容是 gravity feedforward。
-   - 当前第一阶段已经采用该方案。
+   - 已经实现 `position + velocity + kp + kd + effort` 完整 command，effort 内容当前是 gravity feedforward。
+   - 当前已经采用该方案作为 SERVO 主线。
    - controller 同时支持 `/easyarm_servo_controller/joint_positions` 的 `Float64MultiArray` position-only 输入和 `/easyarm_servo_controller/joint_trajectory` 的 `JointTrajectory` 输入。
-   - `JointTrajectory` 输入中的 velocity / acceleration 已预留解析路径，后续可用于速度/加速度前馈和完整动力学。
+   - `JointTrajectory` 输入中的 velocity 已传给 hardware，acceleration 已解析和缓存，后续可用于加速度前馈和完整动力学。
    - 无效输入只 warn 并保持上一条有效 command，timeout 后保持 hold position。
 
 3. `velocity_controllers/JointGroupVelocityController`
@@ -233,8 +236,8 @@ effort / feedforward source:
 ```text
 easyarm_controller
   EasyArmServoController
-  EasyArmDragController     # 后续评估，不急
-  EasyArmTrajectoryController # 后续评估，不急
+  EasyArmDragController       # 下一步做 inactive 原型
+  EasyArmTrajectoryController # 后续评估
 ```
 
 优先级：
@@ -244,13 +247,14 @@ easyarm_controller
    - 服务 `SpeedJ/SpeedL/ServoJ/ServoL`。
    - 高频流式控制。
    - 当前接收 `JointTrajectory`，解析 position / velocity / acceleration。
-   - 当前只写入 `position` command interface。
-   - 后续再内部调用 `easyarm_dynamics`。
    - 当前已经写入 `position + velocity + kp + kd + effort` command interfaces。
+   - `JointTrajectory` velocity 已经传递到 hardware；acceleration 先缓存，后续用于完整动力学 effort。
+   - controller 已调用 `easyarm_dynamics` 计算 gravity feedforward，后续可扩展为速度/加速度/摩擦等完整前馈。
 
 2. `EasyArmDragController`
-   - 只有在 `EasyArmServoController` 稳定后再评估。
    - 迁移前保留 hardware 内现有 `DRAG`。
+   - 下一步可以开始做 inactive 原型，先通过手动 controller 切换真机验证。
+   - 原型稳定后，再评估是否由 motion server 接管 DRAG controller。
 
 3. `EasyArmTrajectoryController`
    - 只有当 JTC 无法满足 `MoveJ/MoveL` 需求时再考虑。
@@ -285,8 +289,8 @@ Task Skill / Interface              # 任务技能或对外接口：用户真正
   MoveL                             # 笛卡尔空间直线规划运动
   SpeedJ                            # 关节空间速度伺服
   SpeedL                            # 笛卡尔空间速度伺服
-  ServoJ                            # 关节空间位置伺服，尚未实现
-  ServoL                            # 笛卡尔空间位置伺服，尚未实现
+  ServoJ                            # 关节空间位置伺服，已实现第一版
+  ServoL                            # 笛卡尔空间位置伺服，已实现第一版
   drag teaching                     # 拖拽示教
   constant-force press              # 恒力按压
   surface following                 # 沿面跟随
@@ -472,24 +476,24 @@ q_cmd += qd_cmd * dt
 - MoveIt Servo 输出 `trajectory_msgs/JointTrajectory` 到 `/easyarm_servo_controller/joint_trajectory`。
 - `publish_period` 配置为 `0.005s`。
 - `EasyArmServoController` 兼容 `/easyarm_servo_controller/joint_positions` 的 position-only `Float64MultiArray` 输入。
-- `EasyArmServoController` 当前写入 `position + velocity + kp + kd + effort`，velocity 暂时固定为 `0.0`，effort 内容是 gravity feedforward。
-- `JointTrajectory` 中的 velocity / acceleration 已解析并缓存，后续用于速度前馈、加速度前馈和完整动力学。
-- 当前已在虚拟/仿真环境验证 `SpeedJ/SpeedL` 正常，尚未做真机测试。
+- `EasyArmServoController` 当前写入 `position + velocity + kp + kd + effort`，`JointTrajectory` 中的 velocity 已传给 hardware，acceleration 已解析并缓存。
+- effort 内容当前是 gravity feedforward，后续扩展到速度前馈、加速度前馈和完整动力学。
+- 当前已完成真机验证：`SpeedJ/SpeedL/ServoJ/ServoL` 基本可用。
 
-### Stage 3: easyarm_motion_server 封装 SpeedJ/SpeedL
+### Stage 3: easyarm_motion_server 封装 SERVO 接口
 
 - 已完成第一版。
-- `easyarm_motion_server` 增加 `MoveItServoExecutor`。
+- `easyarm_motion_server` 增加 `MoveItServoRuntime` 和 `PositionServoExecutor`。
 - 进入 SERVO 前停止 MoveIt 执行，并切换 `arm_controller` / `easyarm_servo_controller`。
 - 启动 MoveIt Servo。
 - `/easyarm/stop` 同时停止 MoveIt Servo 输出并发送 zero command。
 - speed command timeout 后发送 zero command 并切回 `arm_controller`。
 - `easyarm_app` 改为发布 `/easyarm/speedj_cmd` 和 `/easyarm/speedl_cmd`。
+- `ServoJ/ServoL` 通过 `PositionServoExecutor` 转换为 MoveIt Servo 的 `JointJog/TwistStamped` 输入。
 
 后续需要继续打磨：
 
-- 真机低速验证。
-- 失败恢复和状态上报。
+- 继续完善失败恢复和状态上报。
 - controller 切换耗时和边界条件。
 - `SERVO` 与 hardware `POSITION/IDLE/DRAG` 历史模式的命名解耦。
 
@@ -498,13 +502,16 @@ q_cmd += qd_cmd * dt
 - 在现有 `easyarm_controller/EasyArmServoController` 内继续扩展。
 - controller 内调用 `easyarm_dynamics`。
 - 从 gravity-only effort 扩展到使用 velocity / acceleration 前馈。
-- 后续把 velocity 从占位输出扩展为真实速度前馈，并把 effort 从 gravity-only 扩展为 full dynamics effort。
+- 后续把 acceleration 用于加速度前馈，并把 effort 从 gravity-only 扩展为 full dynamics effort。
 - 逐步把 gravity compensation、feedforward、impedance/admittance 从 hardware 迁移到 EasyArm 自定义 streaming controller。
 
-### Stage 5: 评估 DRAG 和 MOVE 是否迁移
+### Stage 5: EasyArmDragController 原型
 
-- `DRAG` 当前已经可用，短期不迁移。
-- 等 `EasyArmServoController` 稳定后，再评估是否新增 `EasyArmDragController`。
+- 当前可以开始新增 `EasyArmDragController` 原型，但不要立即替换 hardware 内现有 `DRAG`。
+- 第一阶段让 `easyarm_drag_controller` 默认 inactive，只通过 `ros2 control switch_controllers` 手动切换真机测试。
+- 目标行为对齐当前 hardware DRAG：`kp=0`、`kd=drag_kd`、`velocity=0`、`effort=gravity(q) * drag_gravity_scale`。
+- 验证 `MOVE -> DRAG`、`SERVO -> DRAG`、`DRAG -> MOVE/SERVO` 切换不会回跳、冲击或残留旧目标。
+- 手感和安全性不低于 hardware DRAG 后，再考虑由 `easyarm_motion_server` 管理 DRAG controller。
 - `MoveJ/MoveL` 继续使用 JTC，除非后续证明 JTC 无法满足轨迹执行和动力学补偿需求。
 
 ## Test Strategy
@@ -523,7 +530,7 @@ ros2 topic hz /easyarm_servo_controller/joint_trajectory
 功能回归：
 
 - `MoveJ/MoveL` 在 JTC 模式下仍可正常规划和执行。
-- `SpeedJ/SpeedL` 在 forward controller 模式下运动连续，无明显 JTC 单点轨迹颗粒感。
+- `SpeedJ/SpeedL` 在 EasyArmServoController 模式下运动连续，无明显 JTC 单点轨迹颗粒感。
 - controller 切换时不会出现旧 JTC 目标残留导致的回跳。
 - `/easyarm/stop` 可以停止 MoveIt Servo 输出，并让机械臂进入安全 hold。
 - `safe_shutdown.sh` 不受影响，仍可回到安全位并 deactivate hardware。
@@ -545,9 +552,8 @@ ros2 topic hz /easyarm_servo_controller/joint_trajectory
 ## Assumptions
 
 - 本计划记录后续架构方向，不代表当前已全部实现。
-- `ServoJ/ServoL` 尚未实现。
-- `DRAG` 已实现且短期保留在 `easyarm_hardware`。
+- `ServoJ/ServoL` 已实现第一版并完成真机测试。
+- `DRAG` 已实现且当前仍保留在 `easyarm_hardware`；下一步只做 controller 原型，不直接替换。
 - `MoveJ/MoveL` 长期优先继续使用 JTC。
 - `SpeedJ/SpeedL/ServoJ/ServoL` 走实时链路，不再继续沿 JTC 路线打磨。
-- Forward controller 方案先在 mock 中验证，再进入真实硬件。
-- 自定义 controller 是中长期方向，不作为第一步直接替换现有硬件行为。
+- 自定义 controller 已成为 SERVO 主线；后续 DRAG controller 先以 inactive 原型验证，再决定是否替换现有硬件行为。

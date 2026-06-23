@@ -61,13 +61,14 @@ easyarm_app
 
 ## Current Servo Chain
 
-当前 `SpeedJ/SpeedL` 链路是：
+当前 `SpeedJ/SpeedL/ServoJ/ServoL` 都已收口到 SERVO 链路：
 
 ```text
 easyarm_app
   -> /easyarm/speedj_cmd 或 /easyarm/speedl_cmd
+  -> /easyarm/servoj_cmd 或 /easyarm/servol_cmd
     -> easyarm_motion_server
-      -> MoveItServoExecutor
+      -> MoveItServoRuntime / PositionServoExecutor
         -> /servo_node/start_servo
         -> /servo_node/delta_joint_cmds 或 /servo_node/delta_twist_cmds
           -> MoveIt Servo
@@ -82,11 +83,11 @@ easyarm_app
 - controller 切换、MoveIt Servo 启动、zero command、timeout 回退由 `easyarm_motion_server` 统一处理。
 - MoveIt Servo 输出已经从 JTC 短轨迹改为高频 `trajectory_msgs/JointTrajectory`。
 - `easyarm_servo_controller` 使用自定义 `easyarm_controller/EasyArmServoController`，用于 200Hz 流式输出，并已经开始向 hardware 写入完整关节运控 command：`position + velocity + kp + kd + effort`。
-- 当前已在虚拟/仿真环境验证 `SpeedJ/SpeedL` 可用，尚未做真机测试。
+- 当前 `SpeedJ/SpeedL/ServoJ/ServoL` 已完成真机测试，基本可用；ServoL 在奇异点附近仍依赖 MoveIt Servo 降速保护。
 
 当前仍然存在的问题：
 
-- `easyarm_servo_controller` 当前下发 `position + velocity + kp + kd + effort`；velocity 第一版固定为 `0.0`，effort 当前只包含 gravity feedforward。`JointTrajectory` 输入中的 velocity / acceleration 会解析和缓存，后续用于速度/加速度前馈。
+- `easyarm_servo_controller` 当前下发 `position + velocity + kp + kd + effort`；`JointTrajectory` 输入中的 velocity 已经传给 hardware，acceleration 已解析和缓存，后续用于完整动力学 effort。
 - `easyarm_servo_controller` 同时保留 `/easyarm_servo_controller/joint_positions` 的 `std_msgs/Float64MultiArray` 兼容输入，但该输入只表示 position-only，长度必须等于关节数。
 - controller 激活时会用当前 joint state 初始化 hold position；输入 timeout 后继续保持上一条有效 position，不清零。
 - 无效输入，例如缺少关节、数组长度不对或出现非有限数值时，只 warn 并保持上一条有效 command。
@@ -217,7 +218,7 @@ effort source:
 这意味着 hardware 在中间阶段需要同时兼容：
 
 - 旧链路：`MoveJ/MoveL/DRAG` 依赖 hardware 内部 gravity / damping。
-- 新链路：`SpeedJ/SpeedL` 逐步迁向 controller 层实时控制。
+- 新链路：`SpeedJ/SpeedL/ServoJ/ServoL` 已经进入 controller 层实时控制主线。
 
 这种过渡复杂度是合理的，但应在代码和文档中明确标记为临时兼容层，避免继续把上层 `SERVO`、`MOVE` 等概念塞进 hardware。
 
@@ -228,7 +229,7 @@ effort source:
 ```text
 easyarm_controller
   EasyArmServoController
-  EasyArmDragController       # 后续评估
+  EasyArmDragController       # 下一步建议做 inactive 原型
   EasyArmTrajectoryController # 后续评估
 ```
 
@@ -240,12 +241,13 @@ easyarm_controller
    - 高频流式控制。
    - 接收来自 MoveIt Servo 的 `JointTrajectory`，并兼容 position-only `Float64MultiArray`。
    - 当前 claim/write `position + velocity + kp + kd + effort` command interfaces。
-   - `velocity` 当前为 `0.0` 占位；`effort` 当前为 controller feedforward effort，内容是 `gravity(q_target)`。
-   - 已解析和缓存 `velocity / acceleration`，后续可用于速度/加速度前馈。
+   - `JointTrajectory` velocity 已传给 hardware；acceleration 已解析和缓存，后续可用于完整动力学 effort。
+   - `effort` 当前为 controller feedforward effort，内容是 `gravity(q_target)`。
 
 2. `EasyArmDragController`
-   - 当前 `DRAG` 已在 hardware 中可用，短期不迁移。
-   - 等 SERVO controller 稳定后，再评估是否迁移拖拽模式。
+   - 当前 `DRAG` 已在 hardware 中可用，正式行为先不替换。
+   - 下一步可以新增 inactive 原型，手动切 controller 测试 `kp=0`、`kd=drag_kd`、`effort=gravity(q) * drag_gravity_scale` 的拖拽手感。
+   - 只有完成 `MOVE/SERVO/DRAG` 双向切换和 safe shutdown 回归后，才考虑由 motion server 接管 DRAG controller。
 
 3. `EasyArmTrajectoryController`
    - 当前 `MoveJ/MoveL` 使用 JTC 是合理的。
@@ -404,32 +406,32 @@ easyarm_move_task
 ### Short Term
 
 - 保持当前 `MoveJ/MoveL` 链路稳定。
-- 保持 `DRAG` 在 `easyarm_hardware` 内，避免影响已验证真机行为。
+- 保持默认 `DRAG` 在 `easyarm_hardware` 内，避免影响已验证真机行为；可以开始 `EasyArmDragController` inactive 原型。
 - 明确 `easyarm_a1_bringup` 是正式启动入口。
 - 不再向 `easyarm_move_task` 添加新正式功能。
 - 清理 `__pycache__`，并评估是否给 `ref/` 下外部 SDK 加 `COLCON_IGNORE`。
 
 ### Mid Term
 
-- `easyarm_motion_server` 已经封装 `SpeedJ/SpeedL`，后续继续打磨状态上报、失败恢复和真机安全验证。
+- `easyarm_motion_server` 已经封装 `SpeedJ/SpeedL/ServoJ/ServoL`，后续继续打磨状态上报和失败恢复。
 - `easyarm_app` 已经不再直接调用 MoveIt Servo 原生接口，后续保持 app 只调用 EasyArm 自己的接口。
-- 在 mock 和真机低速环境继续验证 MoveIt Servo 输出到 `easyarm_servo_controller`。
-- 评估 `MultiInterfaceForwardCommandController` 是否能稳定输出 `position + velocity`。
+- 继续在真机低速环境验证 MoveIt Servo 输出到 `easyarm_servo_controller` 的边界行为，重点关注奇异点、碰撞缩放和 controller 切换。
+- 新增 `EasyArmDragController` inactive 原型，先手动切换测试，不改变默认 DRAG。
 
 ### Long Term
 
 - 继续扩展 `easyarm_controller/EasyArmServoController`。
-- 将 SERVO 链路从当前完整 command 占位版本继续迁移到真实 velocity feed-forward + full dynamics effort streaming controller。
+- 将 SERVO 链路从当前 gravity-only effort 继续扩展到速度/加速度前馈和 full dynamics effort streaming controller。
 - 逐步把 gravity compensation、feedforward、impedance/admittance 从 hardware 层迁移到 controller 层。
-- 等 SERVO controller 稳定后，再评估 `DRAG` 是否从 hardware 迁移到 `EasyArmDragController`。
+- 在 `EasyArmDragController` 原型真机验证通过后，再评估 `DRAG` 是否从 hardware 默认实现迁移到 controller。
 
 ## Architecture Principles
 
 后续判断新功能放在哪里，可以遵循：
 
 - `MOVE`：单点或低频目标，走 MoveIt/Pilz + JTC。
-- `SERVO`：高频连续输入，当前走 MoveIt Servo + EasyArmServoController 完整关节运控 command，长期扩展到真实 velocity feed-forward + full dynamics effort。
-- `DRAG`：短期保留 hardware，长期再评估 controller 化。
+- `SERVO`：高频连续输入，当前走 MoveIt Servo + EasyArmServoController 完整关节运控 command，长期扩展到完整动力学 effort。
+- `DRAG`：默认保留 hardware；下一步以 inactive `EasyArmDragController` 原型验证 controller 化可行性。
 - `easyarm_app`：只做用户入口，不直接碰硬件，不直接调用 MoveIt Servo 原生接口。
 - `easyarm_motion_server`：统一对外运动 API，负责模式协调和运动能力封装。
 - `easyarm_hardware`：长期只做硬件适配和最后安全边界；过渡期保留 gravity/DRAG 兼容逻辑。
