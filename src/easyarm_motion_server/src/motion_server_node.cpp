@@ -53,6 +53,15 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
     rcl_action_server_get_default_options(),
     callback_group_);
 
+  move_named_state_server_ = rclcpp_action::create_server<MoveNamedState>(
+    this,
+    "/easyarm/move_named_state",
+    std::bind(&MotionServerNode::handleMoveNamedStateGoal, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&MotionServerNode::handleMoveNamedStateCancel, this, std::placeholders::_1),
+    std::bind(&MotionServerNode::handleMoveNamedStateAccepted, this, std::placeholders::_1),
+    rcl_action_server_get_default_options(),
+    callback_group_);
+
   set_mode_service_ = create_service<easyarm_interfaces::srv::SetMode>(
     "/easyarm/set_mode",
     std::bind(
@@ -97,6 +106,16 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
     "/easyarm/get_pose",
     std::bind(
       &MotionServerNode::handleGetPose,
+      this,
+      std::placeholders::_1,
+      std::placeholders::_2),
+    rmw_qos_profile_services_default,
+    callback_group_);
+
+  list_named_state_service_ = create_service<easyarm_interfaces::srv::ListNamedState>(
+    "/easyarm/list_named_state",
+    std::bind(
+      &MotionServerNode::handleListNamedState,
       this,
       std::placeholders::_1,
       std::placeholders::_2),
@@ -197,6 +216,36 @@ void MotionServerNode::handleMoveLAccepted(const std::shared_ptr<GoalHandleMoveL
   std::thread{std::bind(&MotionServerNode::executeMoveL, this, goal_handle)}.detach();
 }
 
+rclcpp_action::GoalResponse MotionServerNode::handleMoveNamedStateGoal(
+  const rclcpp_action::GoalUUID &,
+  std::shared_ptr<const MoveNamedState::Goal> goal)
+{
+  if (goal->name.empty()) {
+    RCLCPP_WARN(get_logger(), "Reject MoveNamedState: empty named state");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (busy_.load()) {
+    const auto task = activeTaskSnapshot();
+    RCLCPP_WARN(get_logger(), "Reject MoveNamedState: server is busy with %s", task.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse MotionServerNode::handleMoveNamedStateCancel(
+  const std::shared_ptr<GoalHandleMoveNamedState>)
+{
+  stop_requested_.store(true);
+  moveit_executor_->stop();
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void MotionServerNode::handleMoveNamedStateAccepted(
+  const std::shared_ptr<GoalHandleMoveNamedState> goal_handle)
+{
+  std::thread{std::bind(&MotionServerNode::executeMoveNamedState, this, goal_handle)}.detach();
+}
+
 void MotionServerNode::executeMoveJ(const std::shared_ptr<GoalHandleMoveJ> goal_handle)
 {
   auto result = std::make_shared<MoveJ::Result>();
@@ -287,6 +336,51 @@ void MotionServerNode::executeMoveL(const std::shared_ptr<GoalHandleMoveL> goal_
   releaseTask();
 }
 
+void MotionServerNode::executeMoveNamedState(const std::shared_ptr<GoalHandleMoveNamedState> goal_handle)
+{
+  auto result = std::make_shared<MoveNamedState::Result>();
+  const auto goal = goal_handle->get_goal();
+
+  if (!claimTask("MoveNamedState", result->message)) {
+    result->success = false;
+    goal_handle->abort(result);
+    return;
+  }
+
+  publishMoveNamedStateFeedback(goal_handle, "preparing");
+
+  bool success = false;
+  std::string message;
+  try {
+    success = prepareMotion(message) &&
+      moveit_executor_->runMoveNamedState(
+        *goal,
+        [goal_handle]() { return goal_handle->is_canceling(); },
+        [this, goal_handle](const std::string & state) { publishMoveNamedStateFeedback(goal_handle, state); },
+        message);
+  } catch (const std::exception & exception) {
+    message = exception.what();
+    success = false;
+  }
+
+  if (goal_handle->is_canceling() || stop_requested_.load()) {
+    result->success = false;
+    result->message = "MoveNamedState canceled";
+    goal_handle->canceled(result);
+    releaseTask();
+    return;
+  }
+
+  result->success = success;
+  result->message = message;
+  if (success) {
+    goal_handle->succeed(result);
+  } else {
+    goal_handle->abort(result);
+  }
+  releaseTask();
+}
+
 bool MotionServerNode::claimTask(const std::string & task, std::string & message)
 {
   bool expected = false;
@@ -321,7 +415,7 @@ bool MotionServerNode::prepareMotion(std::string & message)
   }
   updateCurrentMode(mode);
   if (mode != "POSITION") {
-    message = "MoveJ/MoveL require POSITION mode, current mode is " + mode;
+    message = "Move actions require POSITION mode, current mode is " + mode;
     return false;
   }
   if (!joint_state_cache_->waitForFreshState(message)) {
@@ -377,6 +471,15 @@ void MotionServerNode::publishMoveLFeedback(
   const std::string & state)
 {
   auto feedback = std::make_shared<MoveL::Feedback>();
+  feedback->state = state;
+  goal_handle->publish_feedback(feedback);
+}
+
+void MotionServerNode::publishMoveNamedStateFeedback(
+  const std::shared_ptr<GoalHandleMoveNamedState> & goal_handle,
+  const std::string & state)
+{
+  auto feedback = std::make_shared<MoveNamedState::Feedback>();
   feedback->state = state;
   goal_handle->publish_feedback(feedback);
 }
@@ -469,6 +572,31 @@ void MotionServerNode::handleGetPose(
   const std::string source_frame = request->source_frame.empty() ? context_.ee_link : request->source_frame;
 
   response->success = moveit_executor_->getPose(target_frame, source_frame, response->pose, response->message);
+}
+
+void MotionServerNode::handleListNamedState(
+  const std::shared_ptr<easyarm_interfaces::srv::ListNamedState::Request>,
+  std::shared_ptr<easyarm_interfaces::srv::ListNamedState::Response> response)
+{
+  if (!moveit_executor_->isInitialized()) {
+    response->success = false;
+    response->message = "MoveGroupInterface is not initialized";
+    return;
+  }
+
+  response->names = moveit_executor_->listNamedStates();
+  response->joint_names.assign(context_.joint_names.begin(), context_.joint_names.end());
+  response->positions.clear();
+  response->positions.reserve(response->names.size() * context_.joint_names.size());
+  for (const auto & name : response->names) {
+    const auto values = moveit_executor_->getNamedStateValues(name);
+    for (const auto & joint_name : context_.joint_names) {
+      const auto value = values.find(joint_name);
+      response->positions.push_back(value == values.end() ? 0.0 : value->second);
+    }
+  }
+  response->success = true;
+  response->message = "OK";
 }
 
 void MotionServerNode::handleSpeedJCommand(control_msgs::msg::JointJog::SharedPtr command)

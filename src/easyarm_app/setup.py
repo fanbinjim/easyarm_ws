@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'easyarm = easyarm_app.cli:console_main',
             'easyarm_shell = easyarm_app.cli:shell_main',
+            'easyarm_task1 = easyarm_app.task1:main',
         ],
     },
 )

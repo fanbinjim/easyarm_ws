@@ -7,6 +7,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "examples:\n"
             "  movej 0.0025 0.25 2 0.1 -1.57 0.0\n"
+            "  list_named_state\n"
+            "  move_named_state ready\n"
             "  speedj_teleop    # in easyarm_shell: keyboard JointJog mode\n"
             "  movel 0.25 0.0 0.25 0.0 0.0 0.0 1.0\n"
             "  speedj 0 0.05 0 0 0 0 --duration 1.0 --rate 50\n"
@@ -59,6 +61,18 @@ def build_parser() -> argparse.ArgumentParser:
     movel.add_argument("--plan-only", dest="execute", action="store_false")
     movel.set_defaults(execute=True)
 
+    move_named_state = subparsers.add_parser(
+        "move_named_state",
+        help="Call /easyarm/move_named_state using SRDF group_state",
+        epilog="examples:\n  move_named_state ready\n  move_named_state pose1 --plan-only",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    move_named_state.add_argument("name")
+    move_named_state.add_argument("--velocity-scale", type=float, default=0.2)
+    move_named_state.add_argument("--acceleration-scale", type=float, default=0.2)
+    move_named_state.add_argument("--plan-only", dest="execute", action="store_false")
+    move_named_state.set_defaults(execute=True)
+
     set_mode = subparsers.add_parser(
         "set-mode",
         help="Call /easyarm/set_mode",
@@ -70,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("stop", help="Call /easyarm/stop")
     subparsers.add_parser("get-state", help="Call /easyarm/get_state")
     subparsers.add_parser("get-joints", help="Call /easyarm/get_joints")
+    subparsers.add_parser("list_named_state", help="Call /easyarm/list_named_state")
 
     get_pose = subparsers.add_parser("get-pose", help="Call /easyarm/get_pose")
     get_pose.add_argument("--target-frame", default="base_link")

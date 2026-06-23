@@ -1,0 +1,6 @@
+---
+bool success
+string message
+string[] names
+string[] joint_names
+float64[] positions

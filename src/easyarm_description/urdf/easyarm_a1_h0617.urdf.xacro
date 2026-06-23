@@ -21,4 +21,11 @@
   <xacro:easyarm_joint name="Joint5" joints="${joints}" />
   <xacro:easyarm_link name="Link6" links="${links}" inertials="${inertials}" />
   <xacro:easyarm_joint name="Joint6" joints="${joints}" />
+
+  <link name="flange" />
+  <joint name="Link6_to_flange" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="Link6" />
+    <child link="flange" />
+  </joint>
 </robot>

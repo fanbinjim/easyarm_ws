@@ -8,9 +8,11 @@
 #include <control_msgs/msg/joint_jog.hpp>
 #include <easyarm_interfaces/action/move_j.hpp>
 #include <easyarm_interfaces/action/move_l.hpp>
+#include <easyarm_interfaces/action/move_named_state.hpp>
 #include <easyarm_interfaces/srv/get_joints.hpp>
 #include <easyarm_interfaces/srv/get_pose.hpp>
 #include <easyarm_interfaces/srv/get_state.hpp>
+#include <easyarm_interfaces/srv/list_named_state.hpp>
 #include <easyarm_interfaces/srv/set_mode.hpp>
 #include <easyarm_interfaces/srv/stop.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -38,8 +40,10 @@ public:
 private:
   using MoveJ = easyarm_interfaces::action::MoveJ;
   using MoveL = easyarm_interfaces::action::MoveL;
+  using MoveNamedState = easyarm_interfaces::action::MoveNamedState;
   using GoalHandleMoveJ = rclcpp_action::ServerGoalHandle<MoveJ>;
   using GoalHandleMoveL = rclcpp_action::ServerGoalHandle<MoveL>;
+  using GoalHandleMoveNamedState = rclcpp_action::ServerGoalHandle<MoveNamedState>;
 
   rclcpp_action::GoalResponse handleMoveJGoal(
     const rclcpp_action::GoalUUID & uuid,
@@ -53,8 +57,16 @@ private:
   rclcpp_action::CancelResponse handleMoveLCancel(const std::shared_ptr<GoalHandleMoveL> goal_handle);
   void handleMoveLAccepted(const std::shared_ptr<GoalHandleMoveL> goal_handle);
 
+  rclcpp_action::GoalResponse handleMoveNamedStateGoal(
+    const rclcpp_action::GoalUUID & uuid,
+    std::shared_ptr<const MoveNamedState::Goal> goal);
+  rclcpp_action::CancelResponse handleMoveNamedStateCancel(
+    const std::shared_ptr<GoalHandleMoveNamedState> goal_handle);
+  void handleMoveNamedStateAccepted(const std::shared_ptr<GoalHandleMoveNamedState> goal_handle);
+
   void executeMoveJ(const std::shared_ptr<GoalHandleMoveJ> goal_handle);
   void executeMoveL(const std::shared_ptr<GoalHandleMoveL> goal_handle);
+  void executeMoveNamedState(const std::shared_ptr<GoalHandleMoveNamedState> goal_handle);
 
   bool claimTask(const std::string & task, std::string & message);
   void releaseTask();
@@ -65,6 +77,9 @@ private:
 
   void publishMoveJFeedback(const std::shared_ptr<GoalHandleMoveJ> & goal_handle, const std::string & state);
   void publishMoveLFeedback(const std::shared_ptr<GoalHandleMoveL> & goal_handle, const std::string & state);
+  void publishMoveNamedStateFeedback(
+    const std::shared_ptr<GoalHandleMoveNamedState> & goal_handle,
+    const std::string & state);
 
   void handleSetMode(
     const std::shared_ptr<easyarm_interfaces::srv::SetMode::Request> request,
@@ -81,6 +96,9 @@ private:
   void handleGetPose(
     const std::shared_ptr<easyarm_interfaces::srv::GetPose::Request> request,
     std::shared_ptr<easyarm_interfaces::srv::GetPose::Response> response);
+  void handleListNamedState(
+    const std::shared_ptr<easyarm_interfaces::srv::ListNamedState::Request> request,
+    std::shared_ptr<easyarm_interfaces::srv::ListNamedState::Response> response);
   void handleSpeedJCommand(control_msgs::msg::JointJog::SharedPtr command);
   void handleSpeedLCommand(geometry_msgs::msg::TwistStamped::SharedPtr command);
   void handleServoJCommand(trajectory_msgs::msg::JointTrajectory::SharedPtr command);
@@ -105,11 +123,13 @@ private:
 
   rclcpp_action::Server<MoveJ>::SharedPtr movej_server_;
   rclcpp_action::Server<MoveL>::SharedPtr movel_server_;
+  rclcpp_action::Server<MoveNamedState>::SharedPtr move_named_state_server_;
   rclcpp::Service<easyarm_interfaces::srv::SetMode>::SharedPtr set_mode_service_;
   rclcpp::Service<easyarm_interfaces::srv::Stop>::SharedPtr stop_service_;
   rclcpp::Service<easyarm_interfaces::srv::GetState>::SharedPtr get_state_service_;
   rclcpp::Service<easyarm_interfaces::srv::GetJoints>::SharedPtr get_joints_service_;
   rclcpp::Service<easyarm_interfaces::srv::GetPose>::SharedPtr get_pose_service_;
+  rclcpp::Service<easyarm_interfaces::srv::ListNamedState>::SharedPtr list_named_state_service_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr speedj_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr speedl_sub_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr servoj_sub_;

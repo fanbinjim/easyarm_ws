@@ -6,6 +6,8 @@ def run_command(node, args) -> int:
         return node.movej(args)
     if args.command == "movel":
         return node.movel(args)
+    if args.command == "move_named_state":
+        return node.move_named_state(args)
     if args.command == "set-mode":
         return node.set_mode(args)
     if args.command == "stop":
@@ -16,6 +18,8 @@ def run_command(node, args) -> int:
         return node.get_joints(args)
     if args.command == "get-pose":
         return node.get_pose(args)
+    if args.command == "list_named_state":
+        return node.list_named_state(args)
     if args.command == "speedj":
         return node.speedj(args)
     if args.command == "speedl":

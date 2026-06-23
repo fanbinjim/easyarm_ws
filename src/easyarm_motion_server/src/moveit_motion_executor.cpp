@@ -158,6 +158,73 @@ bool MoveItMotionExecutor::runMoveL(
   return true;
 }
 
+bool MoveItMotionExecutor::runMoveNamedState(
+  const MoveNamedState::Goal & goal,
+  const CancelCheck & is_canceling,
+  const FeedbackPublisher & publish_feedback,
+  std::string & message)
+{
+  if (is_canceling()) {
+    message = "MoveNamedState canceled before planning";
+    return false;
+  }
+
+  publish_feedback("planning");
+
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+  {
+    std::lock_guard<std::mutex> lock(move_group_mutex_);
+    configureCommonPlanning(goal.velocity_scale, goal.acceleration_scale);
+    move_group_->setPlannerId(context_.movej_planner_id);
+    if (!move_group_->setNamedTarget(goal.name)) {
+      message = "Named state '" + goal.name + "' is not available for group " + context_.planning_group;
+      return false;
+    }
+    const auto plan_result = move_group_->plan(plan);
+    if (!is_success(plan_result)) {
+      message = "MoveNamedState planning failed";
+      return false;
+    }
+  }
+
+  if (!goal.execute) {
+    message = "MoveNamedState planning succeeded";
+    return true;
+  }
+  if (is_canceling()) {
+    message = "MoveNamedState canceled before execution";
+    return false;
+  }
+
+  publish_feedback("executing");
+  const auto execute_result = move_group_->execute(plan);
+  if (!is_success(execute_result)) {
+    message = "MoveNamedState execution failed";
+    return false;
+  }
+
+  message = "MoveNamedState execution succeeded";
+  return true;
+}
+
+std::vector<std::string> MoveItMotionExecutor::listNamedStates() const
+{
+  std::lock_guard<std::mutex> lock(move_group_mutex_);
+  if (!move_group_) {
+    return {};
+  }
+  return move_group_->getNamedTargets();
+}
+
+std::map<std::string, double> MoveItMotionExecutor::getNamedStateValues(const std::string & name) const
+{
+  std::lock_guard<std::mutex> lock(move_group_mutex_);
+  if (!move_group_) {
+    return {};
+  }
+  return move_group_->getNamedTargetValues(name);
+}
+
 void MoveItMotionExecutor::stop()
 {
   std::lock_guard<std::mutex> lock(move_group_mutex_);

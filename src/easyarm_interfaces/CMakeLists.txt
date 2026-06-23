@@ -16,11 +16,13 @@ find_package(builtin_interfaces REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/MoveJ.action"
   "action/MoveL.action"
+  "action/MoveNamedState.action"
   "srv/SetMode.srv"
   "srv/Stop.srv"
   "srv/GetState.srv"
   "srv/GetJoints.srv"
   "srv/GetPose.srv"
+  "srv/ListNamedState.srv"
   DEPENDENCIES
     geometry_msgs
     sensor_msgs

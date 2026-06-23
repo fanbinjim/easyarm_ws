@@ -30,7 +30,9 @@ easyarm_shell 执行文件同目录下的 .easyarm_shell_history
 ```text
 easyarm> get-joints
 easyarm> get-pose
+easyarm> list_named_state
 easyarm> movej 0 0 2.35619 0.7854 -1.5708 0 --plan-only
+easyarm> move_named_state ready --plan-only
 easyarm> speedj_teleop
 easyarm> speedl_teleop
 easyarm> exit
@@ -41,11 +43,13 @@ easyarm> exit
 ```text
 movej
 movel
+move_named_state
 set-mode
 stop
 get-state
 get-joints
 get-pose
+list_named_state
 speedj
 speedl
 speedj_teleop
@@ -111,6 +115,21 @@ ros2 run easyarm_app easyarm movej 0 0 2.35619 0.7854 -1.5708 0 \
   --acceleration-scale 0.2
 ```
 
+查看 SRDF 预设 named state：
+
+```bash
+ros2 run easyarm_app easyarm list_named_state
+```
+
+运动到 SRDF 预设 named state：
+
+```bash
+ros2 run easyarm_app easyarm move_named_state ready --plan-only
+ros2 run easyarm_app easyarm move_named_state ready \
+  --velocity-scale 0.2 \
+  --acceleration-scale 0.2
+```
+
 真实硬件低速 MoveJ：
 
 ```bash
@@ -151,6 +170,34 @@ SpeedL 末端速度遥操：
 ```bash
 ros2 run easyarm_app easyarm set-mode POSITION
 ros2 run easyarm_app easyarm speedl 0.01 0 0 0 0 0 --duration 1.0 --rate 50
+```
+
+## easyarm_task1
+
+`easyarm_task1` 是一个独立任务脚本：
+
+1. 调用 `/easyarm/move_named_state` 运动到 SRDF 里的 `pose1`。
+2. 等待 `--settle-time` 后，按空格确认再开始后续路径。
+3. 读取当前 `Link6` 位姿作为任务原点。
+4. 姿态保持不变，使用 ServoL S 曲线插值依次移动：
+   - `y + 100mm`
+   - `x + 100mm`
+   - `y - 100mm`
+
+运行：
+
+```bash
+ros2 run easyarm_app easyarm_task1
+```
+
+低速/调试参数：
+
+```bash
+ros2 run easyarm_app easyarm_task1 \
+  --velocity-scale 0.05 \
+  --acceleration-scale 0.05 \
+  --segment-duration 4.0 \
+  --rate 50
 ```
 
 ## 键盘 SpeedJ 模式

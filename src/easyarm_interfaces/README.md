@@ -34,6 +34,20 @@ easyarm_interfaces/action/MoveL
 
 `target_pose.header.frame_id` 为空时，服务端默认使用 `base_link`。
 
+### MoveNamedState
+
+```text
+/easyarm/move_named_state
+easyarm_interfaces/action/MoveNamedState
+```
+
+目标字段：
+
+- `name`：MoveIt SRDF 中当前 planning group 的 `group_state` 名称，例如 `home`、`ready`、`pose1`。
+- `velocity_scale`：速度比例，`<= 0` 时由服务端使用默认值。
+- `acceleration_scale`：加速度比例，`<= 0` 时由服务端使用默认值。
+- `execute`：`true` 表示规划并执行，`false` 表示只规划。
+
 ### Services
 
 ```text
@@ -42,6 +56,7 @@ easyarm_interfaces/action/MoveL
 /easyarm/get_state  easyarm_interfaces/srv/GetState
 /easyarm/get_joints easyarm_interfaces/srv/GetJoints
 /easyarm/get_pose   easyarm_interfaces/srv/GetPose
+/easyarm/list_named_state easyarm_interfaces/srv/ListNamedState
 ```
 
 `SetMode` 支持：
@@ -59,7 +74,9 @@ colcon build --packages-select easyarm_interfaces
 source install/setup.bash
 ros2 interface show easyarm_interfaces/action/MoveJ
 ros2 interface show easyarm_interfaces/action/MoveL
+ros2 interface show easyarm_interfaces/action/MoveNamedState
 ros2 interface show easyarm_interfaces/srv/SetMode
 ros2 interface show easyarm_interfaces/srv/GetJoints
 ros2 interface show easyarm_interfaces/srv/GetPose
+ros2 interface show easyarm_interfaces/srv/ListNamedState
 ```

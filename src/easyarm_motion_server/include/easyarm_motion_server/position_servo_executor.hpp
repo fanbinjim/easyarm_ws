@@ -8,6 +8,7 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
 #include <moveit/robot_model/robot_model.h>
@@ -46,6 +47,12 @@ private:
     ServoL
   };
 
+  enum class ServoLTrackingState
+  {
+    Tracking,
+    Recovering
+  };
+
   struct ServoJTarget
   {
     std::array<double, 6> joints{};
@@ -71,8 +78,27 @@ private:
     const std::vector<double> & joint_positions,
     geometry_msgs::msg::PoseStamped & pose,
     std::string & message) const;
+  geometry_msgs::msg::PoseStamped shapeServoLTarget(
+    const geometry_msgs::msg::PoseStamped & external_target,
+    const geometry_msgs::msg::PoseStamped & current_pose,
+    const geometry_msgs::msg::PoseStamped & previous_internal_target,
+    ServoLTrackingState & tracking_state,
+    bool internal_target_initialized,
+    double dt) const;
   void publishZeroForActiveCommand();
   void resetLocked();
+  void publishServoLDebugTargets(
+    const geometry_msgs::msg::PoseStamped & external_target,
+    const geometry_msgs::msg::PoseStamped & internal_target) const;
+  void publishServoLDebugState(
+    ServoLTrackingState tracking_state,
+    const geometry_msgs::msg::PoseStamped & external_target,
+    const geometry_msgs::msg::PoseStamped & internal_target,
+    const geometry_msgs::msg::PoseStamped & current_pose,
+    double position_error,
+    double orientation_error,
+    bool hold_active) const;
+  std::string servoLTrackingStateName(ServoLTrackingState tracking_state) const;
   double limitRate(double target, double previous, double max_delta) const;
   double clampAbs(double value, double limit) const;
   std::array<double, 6> zeroJointCommand() const;
@@ -83,15 +109,22 @@ private:
   MoveItServoRuntime & servo_runtime_;
   std::unique_ptr<robot_model_loader::RobotModelLoader> robot_model_loader_;
   moveit::core::RobotModelPtr robot_model_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr servol_external_target_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr servol_internal_target_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr servol_debug_pub_;
 
   mutable std::mutex mutex_;
   CommandType command_type_{CommandType::None};
   ServoJTarget servoj_target_;
   ServoLTarget servol_target_;
+  ServoLTrackingState servol_tracking_state_{ServoLTrackingState::Tracking};
+  geometry_msgs::msg::PoseStamped servol_internal_target_pose_;
   rclcpp::Time last_target_time_;
   rclcpp::Time last_update_time_;
   std::array<double, 6> last_joint_velocity_{};
   std::array<double, 6> last_twist_{};
+  bool servol_internal_target_initialized_{false};
+  bool servol_hold_active_{false};
 
   double rate_hz_{200.0};
   double command_timeout_sec_{0.2};
@@ -110,6 +143,17 @@ private:
   double servol_target_jump_rad_{1.0};
   double servol_position_tolerance_m_{0.001};
   double servol_orientation_tolerance_rad_{0.01};
+  double servol_position_tolerance_exit_m_{0.003};
+  double servol_orientation_tolerance_exit_rad_{0.03};
+  bool servol_target_governor_enabled_{true};
+  double servol_max_follow_distance_m_{0.015};
+  double servol_max_follow_angle_rad_{0.10};
+  double servol_target_lost_distance_m_{0.06};
+  double servol_target_lost_angle_rad_{0.40};
+  double servol_reacquire_distance_m_{0.02};
+  double servol_reacquire_angle_rad_{0.15};
+  double servol_recover_linear_velocity_m_s_{0.05};
+  double servol_recover_angular_velocity_rad_s_{0.5};
 };
 
 }  // namespace easyarm_motion_server

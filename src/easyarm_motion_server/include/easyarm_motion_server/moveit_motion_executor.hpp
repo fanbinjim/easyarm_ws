@@ -1,12 +1,15 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <easyarm_interfaces/action/move_j.hpp>
 #include <easyarm_interfaces/action/move_l.hpp>
+#include <easyarm_interfaces/action/move_named_state.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <rclcpp/rclcpp.hpp>
@@ -23,6 +26,7 @@ class MoveItMotionExecutor
 public:
   using MoveJ = easyarm_interfaces::action::MoveJ;
   using MoveL = easyarm_interfaces::action::MoveL;
+  using MoveNamedState = easyarm_interfaces::action::MoveNamedState;
   using CancelCheck = std::function<bool()>;
   using FeedbackPublisher = std::function<void(const std::string &)>;
 
@@ -40,6 +44,13 @@ public:
     const CancelCheck & is_canceling,
     const FeedbackPublisher & publish_feedback,
     std::string & message);
+  bool runMoveNamedState(
+    const MoveNamedState::Goal & goal,
+    const CancelCheck & is_canceling,
+    const FeedbackPublisher & publish_feedback,
+    std::string & message);
+  std::vector<std::string> listNamedStates() const;
+  std::map<std::string, double> getNamedStateValues(const std::string & name) const;
   void stop();
   bool getPose(
     const std::string & target_frame,

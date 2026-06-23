@@ -9,11 +9,13 @@
 ```text
 /easyarm/movej      easyarm_interfaces/action/MoveJ
 /easyarm/movel      easyarm_interfaces/action/MoveL
+/easyarm/move_named_state easyarm_interfaces/action/MoveNamedState
 /easyarm/set_mode   easyarm_interfaces/srv/SetMode
 /easyarm/stop       easyarm_interfaces/srv/Stop
 /easyarm/get_state  easyarm_interfaces/srv/GetState
 /easyarm/get_joints easyarm_interfaces/srv/GetJoints
 /easyarm/get_pose   easyarm_interfaces/srv/GetPose
+/easyarm/list_named_state easyarm_interfaces/srv/ListNamedState
 /easyarm/speedj_cmd control_msgs/msg/JointJog
 /easyarm/speedl_cmd geometry_msgs/msg/TwistStamped
 ```
@@ -34,6 +36,8 @@ max_joint_state_age=0.5
 ```
 
 `MoveJ` 使用 Pilz `PTP`，`MoveL` 使用 Pilz `LIN`。`MoveJ/MoveL` 不会自动切换硬件模式，只有当前硬件模式已经是 `POSITION` 时才允许规划和执行；如果当前是 `DRAG` 或 `IDLE`，会直接返回失败。
+
+`MoveNamedState` 使用 MoveIt 原生 SRDF `group_state`。服务端通过 `MoveGroupInterface::setNamedTarget()` 规划到 `easyarm_a1.srdf` 中当前 planning group 已定义的 named state，例如 `home`、`ready`、`pose1`。`/easyarm/list_named_state` 通过 `MoveGroupInterface::getNamedTargets()` 返回当前可用名称。
 
 执行 MoveJ/MoveL 前会等待 `/joint_states` 包含 6 个关节并且时间戳足够新，避免刚启动时 MoveIt 因当前状态过期而在执行阶段 abort。
 
@@ -94,6 +98,19 @@ ros2 run easyarm_app easyarm set-mode POSITION
 
 ```bash
 ros2 run easyarm_app easyarm movej 0.0 1.85 2.69 0.96 1.57 0.0 --plan-only
+```
+
+查看 SRDF 预设位姿：
+
+```bash
+ros2 run easyarm_app easyarm list_named_state
+```
+
+运动到 SRDF 预设位姿：
+
+```bash
+ros2 run easyarm_app easyarm move_named_state ready --plan-only
+ros2 run easyarm_app easyarm move_named_state ready
 ```
 
 规划成功后再执行：

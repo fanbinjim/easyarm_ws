@@ -2,8 +2,8 @@ import time
 
 import rclpy
 from control_msgs.msg import JointJog
-from easyarm_interfaces.action import MoveJ, MoveL
-from easyarm_interfaces.srv import GetJoints, GetPose, GetState, SetMode, Stop
+from easyarm_interfaces.action import MoveJ, MoveL, MoveNamedState
+from easyarm_interfaces.srv import GetJoints, GetPose, GetState, ListNamedState, SetMode, Stop
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -18,11 +18,13 @@ class EasyArmCli(Node):
         super().__init__("easyarm_app_cli")
         self.movej_client = ActionClient(self, MoveJ, "/easyarm/movej")
         self.movel_client = ActionClient(self, MoveL, "/easyarm/movel")
+        self.move_named_state_client = ActionClient(self, MoveNamedState, "/easyarm/move_named_state")
         self.set_mode_client = self.create_client(SetMode, "/easyarm/set_mode")
         self.stop_client = self.create_client(Stop, "/easyarm/stop")
         self.get_state_client = self.create_client(GetState, "/easyarm/get_state")
         self.get_joints_client = self.create_client(GetJoints, "/easyarm/get_joints")
         self.get_pose_client = self.create_client(GetPose, "/easyarm/get_pose")
+        self.list_named_state_client = self.create_client(ListNamedState, "/easyarm/list_named_state")
         self.speedj_pub = self.create_publisher(JointJog, "/easyarm/speedj_cmd", 10)
         self.speedl_pub = self.create_publisher(TwistStamped, "/easyarm/speedl_cmd", 10)
         self.servoj_pub = self.create_publisher(JointTrajectory, "/easyarm/servoj_cmd", 10)
@@ -60,6 +62,18 @@ class EasyArmCli(Node):
         goal.acceleration_scale = float(args.acceleration_scale)
         goal.execute = bool(args.execute)
         return self._send_action_goal(self.movel_client, goal, args.timeout)
+
+    def move_named_state(self, args) -> int:
+        if not self.move_named_state_client.wait_for_server(timeout_sec=args.timeout):
+            self.get_logger().error("/easyarm/move_named_state action server not available")
+            return 1
+
+        goal = MoveNamedState.Goal()
+        goal.name = args.name
+        goal.velocity_scale = float(args.velocity_scale)
+        goal.acceleration_scale = float(args.acceleration_scale)
+        goal.execute = bool(args.execute)
+        return self._send_action_goal(self.move_named_state_client, goal, args.timeout)
 
     def set_mode(self, args) -> int:
         if not self.set_mode_client.wait_for_service(timeout_sec=args.timeout):
@@ -165,6 +179,39 @@ class EasyArmCli(Node):
             f"{pose.pose.orientation.z:.6f} "
             f"{pose.pose.orientation.w:.6f}"
         )
+        return 0 if response.success else 1
+
+    def list_named_state(self, args) -> int:
+        if not self.list_named_state_client.wait_for_service(timeout_sec=args.timeout):
+            self.get_logger().error("/easyarm/list_named_state service not available")
+            return 1
+        future = self.list_named_state_client.call_async(ListNamedState.Request())
+        if not _spin_until_complete(self, future, args.timeout):
+            self.get_logger().error("Timeout calling /easyarm/list_named_state")
+            return 1
+        response = future.result()
+        if response is None:
+            self.get_logger().error("No response from /easyarm/list_named_state")
+            return 1
+        self._log_response(response.success, response.message)
+        if response.names:
+            self._log_info("names: " + " ".join(response.names))
+            width = len(response.joint_names)
+            for index, name in enumerate(response.names):
+                start = index * width
+                values = list(response.positions[start:start + width])
+                if len(values) != width:
+                    continue
+                self._log_info(
+                    f"{name}: " + " ".join(
+                        f"{joint}={value:.6f}" for joint, value in zip(response.joint_names, values)
+                    )
+                )
+                self._log_info(
+                    f"{name} cmd: " + " ".join(f"{value:.6f}" for value in values)
+                )
+        else:
+            self._log_info("names:")
         return 0 if response.success else 1
 
     def speedj(self, args) -> int:
