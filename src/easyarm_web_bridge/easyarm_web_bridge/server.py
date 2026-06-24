@@ -1,9 +1,12 @@
 import argparse
 import asyncio
 import os
+import shlex
+import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import rclpy
@@ -11,7 +14,7 @@ from control_msgs.msg import JointJog
 from controller_manager_msgs.srv import ListControllers
 from easyarm_interfaces.action import MoveJ, MoveL, MoveNamedState
 from easyarm_interfaces.srv import GetJoints, GetPose, GetState, ListNamedState, SetMode, Stop
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from rcl_interfaces.msg import Log
@@ -87,8 +90,14 @@ class EasyArmWebBridge(Node):
         self.declare_parameter("token", os.environ.get("EASYARM_WEB_TOKEN", ""))
         self.declare_parameter("request_timeout_sec", 5.0)
         self.declare_parameter("stream_idle_timeout_sec", 0.75)
+        self.declare_parameter(
+            "safe_shutdown_command",
+            "ros2 run easyarm_a1_bringup safe_shutdown.sh",
+        )
+        self.declare_parameter("safe_shutdown_log_dir", "")
 
         self._lock = threading.Lock()
+        self._safe_shutdown_lock = threading.Lock()
         self._latest_joint_state: Optional[JointState] = None
         self._latest_joint_state_time = 0.0
         self._rosout: List[Dict[str, Any]] = []
@@ -96,6 +105,8 @@ class EasyArmWebBridge(Node):
         self._active_goal_handle = None
         self._active_stream_kind = ""
         self._last_stream_command_time = 0.0
+        self._safe_shutdown_process: Optional[subprocess.Popen] = None
+        self._safe_shutdown_log_path = ""
 
         self.movej_client = ActionClient(self, MoveJ, "/easyarm/movej")
         self.movel_client = ActionClient(self, MoveL, "/easyarm/movel")
@@ -139,6 +150,14 @@ class EasyArmWebBridge(Node):
     @property
     def stream_idle_timeout_sec(self) -> float:
         return float(self.get_parameter("stream_idle_timeout_sec").value)
+
+    @property
+    def safe_shutdown_command(self) -> str:
+        return str(self.get_parameter("safe_shutdown_command").value)
+
+    @property
+    def safe_shutdown_log_dir(self) -> str:
+        return str(self.get_parameter("safe_shutdown_log_dir").value)
 
     def _handle_joint_state(self, message: JointState) -> None:
         with self._lock:
@@ -504,6 +523,97 @@ class EasyArmWebBridge(Node):
             "trajectory_preview": "reserved",
         }
 
+    def _safe_shutdown_log_file(self) -> Path:
+        base_dir = self.safe_shutdown_log_dir
+        if not base_dir:
+            base_dir = os.environ.get("ROS_LOG_DIR", str(Path.home() / ".ros" / "log"))
+        log_dir = Path(base_dir).expanduser() / "easyarm_web_bridge"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir / f"safe_shutdown_{time.strftime('%Y%m%d-%H%M%S')}.log"
+
+    @staticmethod
+    def _bool_env(value: Any) -> str:
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, (int, float)):
+            return "1" if value else "0"
+        text = str(value).strip().lower()
+        return "1" if text in {"1", "true", "yes", "on"} else "0"
+
+    def _safe_shutdown_env(self, payload: Dict[str, Any]) -> Dict[str, str]:
+        env = os.environ.copy()
+        bool_fields = {
+            "skip_stop": "SKIP_STOP",
+            "skip_set_position": "SKIP_SET_POSITION",
+            "skip_move_ready": "SKIP_MOVE_READY",
+            "skip_hardware_disable": "SKIP_HARDWARE_DISABLE",
+            "skip_kill_launch": "SKIP_KILL_LAUNCH",
+            "force_kill_on_disable_failure": "FORCE_KILL_ON_DISABLE_FAILURE",
+        }
+        for payload_key, env_key in bool_fields.items():
+            if payload_key in payload:
+                env[env_key] = self._bool_env(payload[payload_key])
+
+        value_fields = {
+            "motion_timeout": "MOTION_TIMEOUT",
+            "ready_velocity_scale": "READY_VELOCITY_SCALE",
+            "ready_acceleration_scale": "READY_ACCELERATION_SCALE",
+            "term_timeout_seconds": "TERM_TIMEOUT_SECONDS",
+            "kill_timeout_seconds": "KILL_TIMEOUT_SECONDS",
+            "controller_manager": "CONTROLLER_MANAGER",
+            "arm_controller": "ARM_CONTROLLER",
+            "hardware_component": "HARDWARE_COMPONENT",
+            "launch_targets": "EASYARM_LAUNCH_TARGETS",
+        }
+        for payload_key, env_key in value_fields.items():
+            if payload_key in payload:
+                env[env_key] = str(payload[payload_key])
+
+        if "ready_joints" in payload:
+            ready_joints = payload["ready_joints"]
+            if not isinstance(ready_joints, list) or len(ready_joints) != 6:
+                raise ValueError("ready_joints must be a list with 6 values")
+            env["READY_JOINTS"] = " ".join(str(float(value)) for value in ready_joints)
+
+        return env
+
+    def start_safe_shutdown(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        with self._safe_shutdown_lock:
+            if self._safe_shutdown_process is not None and self._safe_shutdown_process.poll() is None:
+                return {
+                    "success": False,
+                    "message": "safe shutdown is already running",
+                    "pid": self._safe_shutdown_process.pid,
+                    "log_path": self._safe_shutdown_log_path,
+                }
+
+            command = shlex.split(self.safe_shutdown_command)
+            if not command:
+                raise ValueError("safe_shutdown_command is empty")
+
+            log_path = self._safe_shutdown_log_file()
+            env = self._safe_shutdown_env(payload)
+            with log_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(f"# {' '.join(command)}\n")
+                process = subprocess.Popen(
+                    command,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    env=env,
+                    start_new_session=True,
+                )
+
+            self._safe_shutdown_process = process
+            self._safe_shutdown_log_path = str(log_path)
+
+            return {
+                "success": True,
+                "message": "safe shutdown started",
+                "pid": process.pid,
+                "log_path": self._safe_shutdown_log_path,
+            }
+
 
 def create_app(bridge: EasyArmWebBridge) -> FastAPI:
     app = FastAPI(title="EasyArm Web Bridge", version="0.1.0")
@@ -572,6 +682,10 @@ def create_app(bridge: EasyArmWebBridge) -> FastAPI:
     @app.post("/api/stop", dependencies=[Depends(check_token)])
     async def stop():
         return await call_ros(bridge.stop)
+
+    @app.post("/api/safe-shutdown", dependencies=[Depends(check_token)])
+    async def safe_shutdown(payload: Optional[Dict[str, Any]] = Body(default=None)):
+        return await call_ros(bridge.start_safe_shutdown, payload or {})
 
     @app.post("/api/actions/active/cancel", dependencies=[Depends(check_token)])
     async def cancel_action():
