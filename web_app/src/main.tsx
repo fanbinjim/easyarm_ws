@@ -86,6 +86,7 @@ type Telemetry = {
     success: boolean | null;
     message: string;
     feedback: string[];
+    termination_reason?: string;
   };
   rosout: Array<{ level: number; name: string; message: string }>;
 };
@@ -459,6 +460,18 @@ function App() {
     }
   };
 
+  const requestTopStop = async () => {
+    try {
+      await post("/api/stop");
+    } catch (err) {
+      if (recoverablePollMessage(err)) {
+        setError("");
+        setPollWarning("Stop request sent. ROS response timed out; watch the status cards and refresh soon.");
+        void refresh();
+      }
+    }
+  };
+
   const closeConfirm = () => setConfirmDialog(null);
 
   const openConfirm = (dialog: ConfirmDialogState) => {
@@ -578,7 +591,7 @@ function App() {
           <button
             className="danger-button"
             onClick={() => {
-              void requestStop().catch(() => undefined);
+              void requestTopStop().catch(() => undefined);
             }}
           >
             <CircleStop /> {activeActionInFlight ? "取消动作" : "Stop"}
