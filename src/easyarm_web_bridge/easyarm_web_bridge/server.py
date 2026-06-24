@@ -13,7 +13,7 @@ import rclpy
 from control_msgs.msg import JointJog
 from controller_manager_msgs.srv import ListControllers
 from easyarm_interfaces.action import MoveJ, MoveL, MoveNamedState
-from easyarm_interfaces.srv import GetJoints, GetPose, GetState, ListNamedState, SetMode, Stop
+from easyarm_interfaces.srv import CancelActiveAction, GetJoints, GetPose, GetState, ListNamedState, SetMode, Stop
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from geometry_msgs.msg import PoseStamped, TwistStamped
@@ -38,6 +38,7 @@ class ActionSnapshot:
     success: Optional[bool] = None
     message: str = ""
     feedback: List[str] = field(default_factory=list)
+    termination_reason: str = ""  # "done" | "canceled" | "stopped" | "failed" | ""
 
 
 def _now() -> float:
@@ -89,6 +90,7 @@ class EasyArmWebBridge(Node):
         self.declare_parameter("port", int(os.environ.get("EASYARM_WEB_BACKEND_PORT", "8000")))
         self.declare_parameter("token", os.environ.get("EASYARM_WEB_TOKEN", ""))
         self.declare_parameter("request_timeout_sec", 5.0)
+        self.declare_parameter("action_timeout_sec", 60.0)
         self.declare_parameter("stream_idle_timeout_sec", 0.75)
         self.declare_parameter(
             "safe_shutdown_command",
@@ -114,6 +116,7 @@ class EasyArmWebBridge(Node):
 
         self.set_mode_client = self.create_client(SetMode, "/easyarm/set_mode")
         self.stop_client = self.create_client(Stop, "/easyarm/stop")
+        self.cancel_active_action_client = self.create_client(CancelActiveAction, "/easyarm/cancel_active_action")
         self.get_state_client = self.create_client(GetState, "/easyarm/get_state")
         self.get_joints_client = self.create_client(GetJoints, "/easyarm/get_joints")
         self.get_pose_client = self.create_client(GetPose, "/easyarm/get_pose")
@@ -146,6 +149,10 @@ class EasyArmWebBridge(Node):
     @property
     def request_timeout_sec(self) -> float:
         return float(self.get_parameter("request_timeout_sec").value)
+
+    @property
+    def action_timeout_sec(self) -> float:
+        return float(self.get_parameter("action_timeout_sec").value)
 
     @property
     def stream_idle_timeout_sec(self) -> float:
@@ -264,19 +271,35 @@ class EasyArmWebBridge(Node):
         return {"success": bool(response.success), "message": response.message}
 
     def stop(self) -> Dict[str, Any]:
+        with self._lock:
+            has_active = not self._active_action.done
+        if has_active:
+            try:
+                self.cancel_active_action()
+            except Exception:
+                pass
         response = self._call_service(self.stop_client, Stop.Request())
         with self._lock:
             self._active_action.state = "stopped"
             self._active_action.done = True
+            self._active_action.termination_reason = "stopped"
         return {"success": bool(response.success), "message": response.message}
 
     def cancel_active_action(self) -> Dict[str, Any]:
+        response = self._call_service(
+            self.cancel_active_action_client, CancelActiveAction.Request(),
+            timeout=self.request_timeout_sec,
+        )
         with self._lock:
-            goal_handle = self._active_goal_handle
-        if goal_handle is None:
-            return {"success": False, "message": "No active action goal"}
-        self._wait_future(goal_handle.cancel_goal_async(), self.request_timeout_sec)
-        return {"success": True, "message": "Cancel requested"}
+            self._active_action.state = "canceled"
+            self._active_action.done = True
+            self._active_action.termination_reason = "canceled"
+            self._active_goal_handle = None
+        return {
+            "success": bool(response.success),
+            "message": response.message,
+            "action_type": response.action_type,
+        }
 
     def _set_action_snapshot(self, **updates) -> None:
         with self._lock:
@@ -338,6 +361,7 @@ class EasyArmWebBridge(Node):
             success=None,
             message="",
             feedback=[],
+            termination_reason="",
         )
 
         send_future = client.send_goal_async(
@@ -346,7 +370,14 @@ class EasyArmWebBridge(Node):
         )
         goal_handle = self._wait_future(send_future, self.request_timeout_sec)
         if goal_handle is None or not goal_handle.accepted:
-            self._set_action_snapshot(state="rejected", accepted=False, done=True, success=False, message="Goal rejected")
+            self._set_action_snapshot(
+                state="rejected",
+                accepted=False,
+                done=True,
+                success=False,
+                message="Goal rejected",
+                termination_reason="failed",
+            )
             return {"success": False, "message": "Goal rejected", "accepted": False, "feedback": []}
 
         with self._lock:
@@ -354,22 +385,64 @@ class EasyArmWebBridge(Node):
         self._set_action_snapshot(state="accepted", accepted=True)
 
         result_future = goal_handle.get_result_async()
-        wrapped_result = self._wait_future(result_future, None)
+        try:
+            wrapped_result = self._wait_future(result_future, self.action_timeout_sec)
+        except TimeoutError:
+            RCLCPP = self.get_logger().error if hasattr(self, 'get_logger') else lambda msg: None
+            self.get_logger().error(f"{kind} action timed out")
+            with self._lock:
+                self._active_goal_handle = None
+            self._set_action_snapshot(
+                state="failed",
+                done=True,
+                success=False,
+                message=f"{kind} action timed out",
+                termination_reason="failed",
+            )
+            return {
+                "success": False,
+                "message": f"{kind} action timed out",
+                "accepted": True,
+                "feedback": [],
+            }
+
         result = wrapped_result.result
         with self._lock:
             feedback = list(self._active_action.feedback)
             self._active_goal_handle = None
+
+        # Determine termination reason from result message
+        termination_reason = "done"
+        if not result.success:
+            msg_lower = result.message.lower()
+            if "cancel" in msg_lower:
+                termination_reason = "canceled"
+            elif "stop" in msg_lower:
+                termination_reason = "stopped"
+            else:
+                termination_reason = "failed"
+
+        state = "done"
+        if termination_reason == "canceled":
+            state = "canceled"
+        elif termination_reason == "stopped":
+            state = "stopped"
+        elif not result.success:
+            state = "failed"
+
         self._set_action_snapshot(
-            state="done" if result.success else "failed",
+            state=state,
             done=True,
             success=bool(result.success),
             message=result.message,
+            termination_reason=termination_reason,
         )
         return {
             "success": bool(result.success),
             "message": result.message,
             "accepted": True,
             "feedback": feedback,
+            "termination_reason": termination_reason,
         }
 
     def make_joint_jog(self, velocities: List[float]) -> JointJog:
@@ -494,6 +567,7 @@ class EasyArmWebBridge(Node):
                 "success": self._active_action.success,
                 "message": self._active_action.message,
                 "feedback": list(self._active_action.feedback),
+                "termination_reason": self._active_action.termination_reason,
             }
         latest_joints = _joint_state_to_dict(joint_state) if joint_state is not None else None
         return {
@@ -515,6 +589,7 @@ class EasyArmWebBridge(Node):
                 "movej": self.movej_client.server_is_ready(),
                 "movel": self.movel_client.server_is_ready(),
                 "move_named_state": self.move_named_state_client.server_is_ready(),
+                "cancel_active_action": self.cancel_active_action_client.service_is_ready(),
             },
             "controller_manager": self.list_controllers_client.service_is_ready(),
             "joint_state_recent": joint_ok,

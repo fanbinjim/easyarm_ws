@@ -108,6 +108,16 @@ MotionServerNode::MotionServerNode(const rclcpp::NodeOptions & options)
     rmw_qos_profile_services_default,
     callback_group_);
 
+  cancel_action_service_ = create_service<easyarm_interfaces::srv::CancelActiveAction>(
+    "/easyarm/cancel_active_action",
+    std::bind(
+      &MotionServerNode::handleCancelActiveAction,
+      this,
+      std::placeholders::_1,
+      std::placeholders::_2),
+    rmw_qos_profile_services_default,
+    callback_group_);
+
   get_state_service_ = create_service<easyarm_interfaces::srv::GetState>(
     "/easyarm/get_state",
     std::bind(
@@ -275,136 +285,220 @@ void MotionServerNode::handleMoveNamedStateAccepted(
 void MotionServerNode::executeMoveJ(const std::shared_ptr<GoalHandleMoveJ> goal_handle)
 {
   auto result = std::make_shared<MoveJ::Result>();
-  const auto goal = goal_handle->get_goal();
 
-  if (!claimTask("MoveJ", result->message)) {
-    result->success = false;
-    goal_handle->abort(result);
-    return;
-  }
-
-  publishMoveJFeedback(goal_handle, "preparing");
-
-  bool success = false;
-  std::string message;
   try {
-    success = prepareMotion(message) &&
-      moveit_executor_->runMoveJ(
-        *goal,
-        [goal_handle]() { return goal_handle->is_canceling(); },
-        [this, goal_handle](const std::string & state) { publishMoveJFeedback(goal_handle, state); },
-        message);
+    const auto goal = goal_handle->get_goal();
+
+    if (!claimTask("MoveJ", result->message)) {
+      result->success = false;
+      goal_handle->abort(result);
+      return;
+    }
+
+    publishMoveJFeedback(goal_handle, "preparing");
+
+    bool success = false;
+    std::string message;
+    try {
+      success = prepareMotion(message) &&
+        moveit_executor_->runMoveJ(
+          *goal,
+          [goal_handle]() { return goal_handle->is_canceling(); },
+          [this, goal_handle](const std::string & state) { publishMoveJFeedback(goal_handle, state); },
+          message);
+    } catch (const std::exception & exception) {
+      message = exception.what();
+      success = false;
+    }
+
+    if (goal_handle->is_canceling()) {
+      result->success = false;
+      result->message = "MoveJ canceled";
+      goal_handle->canceled(result);
+      releaseTask("canceled");
+      return;
+    }
+
+    if (stop_requested_.load()) {
+      result->success = false;
+      result->message = "MoveJ stopped";
+      goal_handle->canceled(result);
+      releaseTask("stopped");
+      return;
+    }
+
+    result->success = success;
+    result->message = message;
+    if (success) {
+      goal_handle->succeed(result);
+      releaseTask("done");
+    } else {
+      goal_handle->abort(result);
+      releaseTask("failed");
+    }
   } catch (const std::exception & exception) {
-    message = exception.what();
-    success = false;
+    RCLCPP_ERROR(get_logger(), "executeMoveJ unhandled exception: %s", exception.what());
+    try {
+      result->success = false;
+      result->message = std::string("MoveJ internal error: ") + exception.what();
+      goal_handle->abort(result);
+    } catch (...) {}
+    releaseTask("failed");
+  } catch (...) {
+    RCLCPP_ERROR(get_logger(), "executeMoveJ unknown exception");
+    try {
+      result->success = false;
+      result->message = "MoveJ internal unknown error";
+      goal_handle->abort(result);
+    } catch (...) {}
+    releaseTask("failed");
   }
-
-  if (goal_handle->is_canceling() || stop_requested_.load()) {
-    result->success = false;
-    result->message = "MoveJ canceled";
-    goal_handle->canceled(result);
-    releaseTask();
-    return;
-  }
-
-  result->success = success;
-  result->message = message;
-  if (success) {
-    goal_handle->succeed(result);
-  } else {
-    goal_handle->abort(result);
-  }
-  releaseTask();
 }
 
 void MotionServerNode::executeMoveL(const std::shared_ptr<GoalHandleMoveL> goal_handle)
 {
   auto result = std::make_shared<MoveL::Result>();
-  const auto goal = goal_handle->get_goal();
 
-  if (!claimTask("MoveL", result->message)) {
-    result->success = false;
-    goal_handle->abort(result);
-    return;
-  }
-
-  publishMoveLFeedback(goal_handle, "preparing");
-
-  bool success = false;
-  std::string message;
   try {
-    success = prepareMotion(message) &&
-      moveit_executor_->runMoveL(
-        *goal,
-        [goal_handle]() { return goal_handle->is_canceling(); },
-        [this, goal_handle](const std::string & state) { publishMoveLFeedback(goal_handle, state); },
-        message);
+    const auto goal = goal_handle->get_goal();
+
+    if (!claimTask("MoveL", result->message)) {
+      result->success = false;
+      goal_handle->abort(result);
+      return;
+    }
+
+    publishMoveLFeedback(goal_handle, "preparing");
+
+    bool success = false;
+    std::string message;
+    try {
+      success = prepareMotion(message) &&
+        moveit_executor_->runMoveL(
+          *goal,
+          [goal_handle]() { return goal_handle->is_canceling(); },
+          [this, goal_handle](const std::string & state) { publishMoveLFeedback(goal_handle, state); },
+          message);
+    } catch (const std::exception & exception) {
+      message = exception.what();
+      success = false;
+    }
+
+    if (goal_handle->is_canceling()) {
+      result->success = false;
+      result->message = "MoveL canceled";
+      goal_handle->canceled(result);
+      releaseTask("canceled");
+      return;
+    }
+
+    if (stop_requested_.load()) {
+      result->success = false;
+      result->message = "MoveL stopped";
+      goal_handle->canceled(result);
+      releaseTask("stopped");
+      return;
+    }
+
+    result->success = success;
+    result->message = message;
+    if (success) {
+      goal_handle->succeed(result);
+      releaseTask("done");
+    } else {
+      goal_handle->abort(result);
+      releaseTask("failed");
+    }
   } catch (const std::exception & exception) {
-    message = exception.what();
-    success = false;
+    RCLCPP_ERROR(get_logger(), "executeMoveL unhandled exception: %s", exception.what());
+    try {
+      result->success = false;
+      result->message = std::string("MoveL internal error: ") + exception.what();
+      goal_handle->abort(result);
+    } catch (...) {}
+    releaseTask("failed");
+  } catch (...) {
+    RCLCPP_ERROR(get_logger(), "executeMoveL unknown exception");
+    try {
+      result->success = false;
+      result->message = "MoveL internal unknown error";
+      goal_handle->abort(result);
+    } catch (...) {}
+    releaseTask("failed");
   }
-
-  if (goal_handle->is_canceling() || stop_requested_.load()) {
-    result->success = false;
-    result->message = "MoveL canceled";
-    goal_handle->canceled(result);
-    releaseTask();
-    return;
-  }
-
-  result->success = success;
-  result->message = message;
-  if (success) {
-    goal_handle->succeed(result);
-  } else {
-    goal_handle->abort(result);
-  }
-  releaseTask();
 }
 
 void MotionServerNode::executeMoveNamedState(const std::shared_ptr<GoalHandleMoveNamedState> goal_handle)
 {
   auto result = std::make_shared<MoveNamedState::Result>();
-  const auto goal = goal_handle->get_goal();
 
-  if (!claimTask("MoveNamedState", result->message)) {
-    result->success = false;
-    goal_handle->abort(result);
-    return;
-  }
-
-  publishMoveNamedStateFeedback(goal_handle, "preparing");
-
-  bool success = false;
-  std::string message;
   try {
-    success = prepareMotion(message) &&
-      moveit_executor_->runMoveNamedState(
-        *goal,
-        [goal_handle]() { return goal_handle->is_canceling(); },
-        [this, goal_handle](const std::string & state) { publishMoveNamedStateFeedback(goal_handle, state); },
-        message);
+    const auto goal = goal_handle->get_goal();
+
+    if (!claimTask("MoveNamedState", result->message)) {
+      result->success = false;
+      goal_handle->abort(result);
+      return;
+    }
+
+    publishMoveNamedStateFeedback(goal_handle, "preparing");
+
+    bool success = false;
+    std::string message;
+    try {
+      success = prepareMotion(message) &&
+        moveit_executor_->runMoveNamedState(
+          *goal,
+          [goal_handle]() { return goal_handle->is_canceling(); },
+          [this, goal_handle](const std::string & state) { publishMoveNamedStateFeedback(goal_handle, state); },
+          message);
+    } catch (const std::exception & exception) {
+      message = exception.what();
+      success = false;
+    }
+
+    if (goal_handle->is_canceling()) {
+      result->success = false;
+      result->message = "MoveNamedState canceled";
+      goal_handle->canceled(result);
+      releaseTask("canceled");
+      return;
+    }
+
+    if (stop_requested_.load()) {
+      result->success = false;
+      result->message = "MoveNamedState stopped";
+      goal_handle->canceled(result);
+      releaseTask("stopped");
+      return;
+    }
+
+    result->success = success;
+    result->message = message;
+    if (success) {
+      goal_handle->succeed(result);
+      releaseTask("done");
+    } else {
+      goal_handle->abort(result);
+      releaseTask("failed");
+    }
   } catch (const std::exception & exception) {
-    message = exception.what();
-    success = false;
+    RCLCPP_ERROR(get_logger(), "executeMoveNamedState unhandled exception: %s", exception.what());
+    try {
+      result->success = false;
+      result->message = std::string("MoveNamedState internal error: ") + exception.what();
+      goal_handle->abort(result);
+    } catch (...) {}
+    releaseTask("failed");
+  } catch (...) {
+    RCLCPP_ERROR(get_logger(), "executeMoveNamedState unknown exception");
+    try {
+      result->success = false;
+      result->message = "MoveNamedState internal unknown error";
+      goal_handle->abort(result);
+    } catch (...) {}
+    releaseTask("failed");
   }
-
-  if (goal_handle->is_canceling() || stop_requested_.load()) {
-    result->success = false;
-    result->message = "MoveNamedState canceled";
-    goal_handle->canceled(result);
-    releaseTask();
-    return;
-  }
-
-  result->success = success;
-  result->message = message;
-  if (success) {
-    goal_handle->succeed(result);
-  } else {
-    goal_handle->abort(result);
-  }
-  releaseTask();
 }
 
 bool MotionServerNode::claimTask(const std::string & task, std::string & message)
@@ -420,9 +514,12 @@ bool MotionServerNode::claimTask(const std::string & task, std::string & message
   return true;
 }
 
-void MotionServerNode::releaseTask()
+void MotionServerNode::releaseTask(const std::string & termination_reason)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  if (!termination_reason.empty()) {
+    last_action_termination_ = termination_reason;
+  }
   active_task_.clear();
   stop_requested_.store(false);
   busy_.store(false);
@@ -671,28 +768,72 @@ void MotionServerNode::handleStop(
   const std::shared_ptr<easyarm_interfaces::srv::Stop::Request>,
   std::shared_ptr<easyarm_interfaces::srv::Stop::Response> response)
 {
-  std::string message;
   stop_requested_.store(true);
   moveit_executor_->stop();
+
   if (position_servo_executor_->isActive()) {
     position_servo_executor_->stop();
   }
+
   if (moveit_servo_runtime_->isActive()) {
-    moveit_servo_runtime_->stop();
     const auto active_task = activeTaskSnapshot();
-    if (!moveit_servo_runtime_->isActive() &&
-      (active_task.rfind("Speed", 0) == 0 || active_task.rfind("Servo", 0) == 0))
-    {
-      releaseTask();
+    if (active_task.rfind("Speed", 0) == 0 || active_task.rfind("Servo", 0) == 0) {
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        last_action_termination_ = "stopped";
+      }
+      releaseTask("stopped");
+    }
+    moveit_servo_runtime_->stop();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    const bool has_action = !active_task_.empty() &&
+      active_task_.rfind("Move", 0) == 0;
+    if (has_action) {
+      last_action_termination_ = "stopped";
     }
   }
-  if (isFreeDriveActive(message) && !exitFreeDriveMode(message)) {
-    response->success = false;
-    response->message = "Stop requested, but failed to exit FREE_DRIVE: " + message;
-    return;
-  }
+
   response->success = true;
   response->message = "Stop requested";
+}
+
+void MotionServerNode::handleCancelActiveAction(
+  const std::shared_ptr<easyarm_interfaces::srv::CancelActiveAction::Request>,
+  std::shared_ptr<easyarm_interfaces::srv::CancelActiveAction::Response> response)
+{
+  const auto task = activeTaskSnapshot();
+  if (task.empty()) {
+    response->success = true;
+    response->message = "No active action to cancel";
+    response->action_type = "";
+    return;
+  }
+
+  stop_requested_.store(true);
+  moveit_executor_->stop();
+
+  if (task.rfind("Speed", 0) == 0 || task.rfind("Servo", 0) == 0) {
+    if (moveit_servo_runtime_->isActive()) {
+      std::string message;
+      releaseTask("canceled");
+      moveit_servo_runtime_->stop();
+      RCLCPP_INFO(get_logger(), "Canceled active servo task: %s", task.c_str());
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!active_task_.empty()) {
+      last_action_termination_ = "canceled";
+    }
+  }
+
+  response->success = true;
+  response->message = "Cancel requested for " + task;
+  response->action_type = task;
 }
 
 void MotionServerNode::handleGetState(

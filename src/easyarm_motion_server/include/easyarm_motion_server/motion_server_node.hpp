@@ -17,6 +17,7 @@
 #include <easyarm_interfaces/srv/get_state.hpp>
 #include <easyarm_interfaces/srv/list_named_state.hpp>
 #include <easyarm_interfaces/srv/set_mode.hpp>
+#include <easyarm_interfaces/srv/cancel_active_action.hpp>
 #include <easyarm_interfaces/srv/stop.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -72,7 +73,7 @@ private:
   void executeMoveNamedState(const std::shared_ptr<GoalHandleMoveNamedState> goal_handle);
 
   bool claimTask(const std::string & task, std::string & message);
-  void releaseTask();
+  void releaseTask(const std::string & termination_reason = "");
   bool prepareMotion(std::string & message);
   bool setMode(const std::string & requested_mode, std::string & message);
   bool setHardwareMode(const std::string & mode, std::string & message);
@@ -99,6 +100,9 @@ private:
   void handleStop(
     const std::shared_ptr<easyarm_interfaces::srv::Stop::Request> request,
     std::shared_ptr<easyarm_interfaces::srv::Stop::Response> response);
+  void handleCancelActiveAction(
+    const std::shared_ptr<easyarm_interfaces::srv::CancelActiveAction::Request> request,
+    std::shared_ptr<easyarm_interfaces::srv::CancelActiveAction::Response> response);
   void handleGetState(
     const std::shared_ptr<easyarm_interfaces::srv::GetState::Request> request,
     std::shared_ptr<easyarm_interfaces::srv::GetState::Response> response);
@@ -136,12 +140,14 @@ private:
   std::atomic_bool stop_requested_{false};
   std::string current_mode_{"UNKNOWN"};
   std::string active_task_;
+  std::string last_action_termination_;  // "canceled" | "stopped" | "failed" | "done" | ""
 
   rclcpp_action::Server<MoveJ>::SharedPtr movej_server_;
   rclcpp_action::Server<MoveL>::SharedPtr movel_server_;
   rclcpp_action::Server<MoveNamedState>::SharedPtr move_named_state_server_;
   rclcpp::Service<easyarm_interfaces::srv::SetMode>::SharedPtr set_mode_service_;
   rclcpp::Service<easyarm_interfaces::srv::Stop>::SharedPtr stop_service_;
+  rclcpp::Service<easyarm_interfaces::srv::CancelActiveAction>::SharedPtr cancel_action_service_;
   rclcpp::Service<easyarm_interfaces::srv::GetState>::SharedPtr get_state_service_;
   rclcpp::Service<easyarm_interfaces::srv::GetJoints>::SharedPtr get_joints_service_;
   rclcpp::Service<easyarm_interfaces::srv::GetPose>::SharedPtr get_pose_service_;
