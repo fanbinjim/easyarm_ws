@@ -10,6 +10,7 @@ import {
   Lock,
   Pause,
   Play,
+  Power,
   Radio,
   RefreshCw,
   Send,
@@ -26,6 +27,11 @@ type ApiState = {
   mode: string;
   busy: boolean;
   active_task: string;
+};
+
+type BasicResponse = {
+  success: boolean;
+  message: string;
 };
 
 type JointResponse = {
@@ -84,6 +90,14 @@ type Telemetry = {
   rosout: Array<{ level: number; name: string; message: string }>;
 };
 
+type ConfirmDialogState = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  tone: "danger" | "warn";
+  onConfirm: () => void;
+};
+
 const JOINT_NAMES = ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"];
 const DEFAULT_MOVEJ = [0, 1.85005, 2.68781, 0.9599, 1.57, 0];
 const DEFAULT_MOVEL = { x: 0.25, y: 0, z: 0.25, qx: 0, qy: 0, qz: 0, qw: 1 };
@@ -117,16 +131,61 @@ function numberText(value: unknown, digits = 4): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "n/a";
 }
 
-function requireConfirm(message: string): boolean {
-  return window.confirm(message);
+function isUnauthorizedError(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith("401 ");
+}
+
+function parseHttpError(err: unknown): { status: number | null; detail: string } {
+  if (!(err instanceof Error)) {
+    return { status: null, detail: String(err) };
+  }
+  const match = err.message.match(/^(\d+)\s+(.+)$/s);
+  if (!match) {
+    return { status: null, detail: err.message };
+  }
+  const status = Number(match[1]);
+  const body = match[2];
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    return { status, detail: typeof parsed.detail === "string" ? parsed.detail : body };
+  } catch {
+    return { status, detail: body };
+  }
+}
+
+function errorMessage(err: unknown): string {
+  if (isUnauthorizedError(err)) {
+    return "token 无效，请重新输入并保存。";
+  }
+  const { status, detail } = parseHttpError(err);
+  if (detail.includes("service is not available") || detail.includes("action server is not available")) {
+    return "机械臂服务未启动或已停止，请启动 EasyArm bringup 后刷新。";
+  }
+  return status == null ? detail : `${status} ${detail}`;
+}
+
+function recoverablePollMessage(err: unknown): string | null {
+  const { status, detail } = parseHttpError(err);
+  if (status === 504 || detail.includes("Timed out waiting for ROS response")) {
+    return "ROS 响应超时，正在等待状态恢复，可稍后刷新。";
+  }
+  if (detail.includes("service is not available") || detail.includes("action server is not available")) {
+    return "运动服务正在切换中，详情状态暂时不可用。";
+  }
+  return null;
 }
 
 function App() {
   const [token, setToken] = useState(readToken());
   const [draftToken, setDraftToken] = useState(token);
+  const [bridgeReachable, setBridgeReachable] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
+  const [pollWarning, setPollWarning] = useState("");
+  const [authInvalid, setAuthInvalid] = useState(false);
   const [busyRequest, setBusyRequest] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [shutdownRequested, setShutdownRequested] = useState(false);
   const [state, setState] = useState<ApiState | null>(null);
   const [joints, setJoints] = useState<JointResponse | null>(null);
   const [pose, setPose] = useState<PoseResponse | null>(null);
@@ -135,8 +194,8 @@ function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [planOnly, setPlanOnly] = useState(true);
-  const [velocityScale, setVelocityScale] = useState(0.2);
-  const [accelScale, setAccelScale] = useState(0.2);
+  const [velocityScale, setVelocityScale] = useState(0.1);
+  const [accelScale, setAccelScale] = useState(0.1);
   const [moveJ, setMoveJ] = useState(DEFAULT_MOVEJ);
   const [moveL, setMoveL] = useState(DEFAULT_MOVEL);
   const [selectedNamedState, setSelectedNamedState] = useState("");
@@ -145,6 +204,7 @@ function App() {
   const [servoJ, setServoJ] = useState(DEFAULT_MOVEJ);
   const [servoL, setServoL] = useState(DEFAULT_MOVEL);
   const commandSocket = useRef<WebSocket | null>(null);
+  const lastControllersRefresh = useRef(0);
 
   const api = useCallback(
     async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -166,41 +226,107 @@ function App() {
   );
 
   const refresh = useCallback(async () => {
-    if (!token) {
+    if (!token || authInvalid) {
       return;
     }
-    setError("");
+    let healthData: HealthResponse;
     try {
-      const [stateData, jointsData, poseData, namedData, controllersData, healthData] = await Promise.all([
-        api<ApiState>("/api/state"),
-        api<JointResponse>("/api/joints"),
-        api<PoseResponse>("/api/pose"),
-        api<NamedStateResponse>("/api/named-states"),
-        api<ControllerResponse>("/api/controllers"),
-        api<HealthResponse>("/api/health")
-      ]);
-      setState(stateData);
-      setJoints(jointsData);
-      setPose(poseData);
-      setNamedStates(namedData);
-      setControllers(controllersData);
+      healthData = await api<HealthResponse>("/api/health");
+      setBridgeReachable(true);
       setHealth(healthData);
-      if (!selectedNamedState && namedData.states.length > 0) {
-        setSelectedNamedState(namedData.states[0].name);
-      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setBridgeReachable(false);
+      setPollWarning("");
+      if (isUnauthorizedError(err)) {
+        setAuthInvalid(true);
+        setConnected(false);
+      }
+      setError(errorMessage(err));
+      return;
     }
-  }, [api, selectedNamedState, token]);
+
+    const tasks: Array<Promise<void>> = [];
+
+    if (healthData.motion_server?.get_state) {
+      tasks.push(
+        api<ApiState>("/api/state").then((stateData) => {
+          setState(stateData);
+          if (shutdownRequested && (healthData.joint_state_recent || stateData.success)) {
+            setShutdownRequested(false);
+          }
+        })
+      );
+      tasks.push(api<JointResponse>("/api/joints").then((jointsData) => setJoints(jointsData)));
+      tasks.push(api<PoseResponse>("/api/pose").then((poseData) => setPose(poseData)));
+      tasks.push(
+        api<NamedStateResponse>("/api/named-states").then((namedData) => {
+          setNamedStates(namedData);
+          if (!selectedNamedState && namedData.states.length > 0) {
+            setSelectedNamedState(namedData.states[0].name);
+          }
+        })
+      );
+    }
+
+    const now = Date.now();
+    if (healthData.controller_manager && now - lastControllersRefresh.current > 5000) {
+      tasks.push(
+        api<ControllerResponse>("/api/controllers").then((controllerData) => {
+          setControllers(controllerData);
+          lastControllersRefresh.current = now;
+        })
+      );
+    }
+
+    if (tasks.length === 0) {
+      setPollWarning("");
+      setError("");
+      return;
+    }
+
+    const results = await Promise.allSettled(tasks);
+    let fatalError: unknown = null;
+    let warningText = "";
+
+    for (const result of results) {
+      if (result.status !== "rejected") {
+        continue;
+      }
+      if (isUnauthorizedError(result.reason)) {
+        fatalError = result.reason;
+        break;
+      }
+      const nextWarning = recoverablePollMessage(result.reason);
+      if (nextWarning) {
+        warningText ||= nextWarning;
+        continue;
+      }
+      fatalError = result.reason;
+      break;
+    }
+
+    if (fatalError) {
+      setPollWarning("");
+      if (isUnauthorizedError(fatalError)) {
+        setAuthInvalid(true);
+        setConnected(false);
+      }
+      setError(errorMessage(fatalError));
+      return;
+    }
+
+    setPollWarning(warningText);
+    setError("");
+  }, [api, authInvalid, selectedNamedState, shutdownRequested, token]);
 
   useEffect(() => {
     refresh();
-    const interval = window.setInterval(refresh, 2000);
+    const interval = window.setInterval(refresh, 500);
     return () => window.clearInterval(interval);
   }, [refresh]);
 
   useEffect(() => {
-    if (!token) {
+    if (!token || authInvalid) {
       setConnected(false);
       return;
     }
@@ -210,7 +336,7 @@ function App() {
     socket.onerror = () => setConnected(false);
     socket.onmessage = (event) => setTelemetry(JSON.parse(event.data));
     return () => socket.close();
-  }, [token]);
+  }, [authInvalid, token]);
 
   const commandWs = useCallback(() => {
     if (commandSocket.current && commandSocket.current.readyState === WebSocket.OPEN) {
@@ -251,14 +377,33 @@ function App() {
     };
   }, [sendStream]);
 
+  useEffect(() => {
+    if (!confirmDialog) {
+      return;
+    }
+    const closeWhenEsc = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeConfirm();
+      }
+    };
+    window.addEventListener("keydown", closeWhenEsc);
+    return () => window.removeEventListener("keydown", closeWhenEsc);
+  }, [confirmDialog]);
+
   const submitToken = () => {
-    writeToken(draftToken.trim());
-    setToken(draftToken.trim());
+    const nextToken = draftToken.trim();
+    writeToken(nextToken);
+    setAuthInvalid(false);
+    setBridgeReachable(false);
+    setError("");
+    setPollWarning("");
+    setToken(nextToken);
   };
 
   const post = async <T,>(path: string, payload?: unknown): Promise<T> => {
     setBusyRequest(true);
     setError("");
+    setPollWarning("");
     try {
       const response = await api<T>(path, {
         method: "POST",
@@ -267,11 +412,95 @@ function App() {
       await refresh();
       return response;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (isUnauthorizedError(err)) {
+        setAuthInvalid(true);
+        setConnected(false);
+      }
+      setError(errorMessage(err));
       throw err;
     } finally {
       setBusyRequest(false);
     }
+  };
+
+  const requestStop = async () => {
+    const globalStopContext =
+      state?.mode === "FREE_DRIVE" ||
+      /^(Speed|Servo)/i.test(state?.active_task ?? "");
+
+    try {
+      const response = await post<BasicResponse>("/api/actions/active/cancel");
+      if (response.success) {
+        return;
+      }
+      if (response.message !== "No active action goal") {
+        setPollWarning(response.message || "取消动作请求未生效，请稍后重试。");
+        return;
+      }
+      if (!globalStopContext) {
+        setPollWarning(activeActionInFlight ? "停止请求未命中当前动作，请稍后重试。" : "当前没有正在执行的动作。");
+        return;
+      }
+    } catch (err) {
+      const nextWarning = recoverablePollMessage(err);
+      if (!nextWarning) {
+        return;
+      }
+    }
+
+    try {
+      await post("/api/stop");
+    } catch (err) {
+      if (recoverablePollMessage(err)) {
+        setError("");
+        setPollWarning("Stop 请求已发出，ROS 响应超时，请观察状态卡片或稍后刷新。");
+        void refresh();
+      }
+    }
+  };
+
+  const closeConfirm = () => setConfirmDialog(null);
+
+  const openConfirm = (dialog: ConfirmDialogState) => {
+    setConfirmDialog(dialog);
+  };
+
+  const requestSafeShutdown = () => {
+    openConfirm({
+      title: "安全关机",
+      message: "确认执行安全关机？这会触发机械臂安全停机流程。",
+      confirmLabel: "执行安全关机",
+      tone: "danger",
+      onConfirm: () => {
+        setShutdownRequested(true);
+        post("/api/safe-shutdown").catch(() => setShutdownRequested(false));
+      }
+    });
+  };
+
+  const enableExecuteMode = () => {
+    if (!planOnly) {
+      return;
+    }
+    openConfirm({
+      title: "切换到执行模式",
+      message: "执行模式下 MoveJ、MoveL 和 Named State 会下发真实运动。",
+      confirmLabel: "切换到执行",
+      tone: "danger",
+      onConfirm: () => setPlanOnly(false)
+    });
+  };
+
+  const requestModeChange = (mode: string) => {
+    openConfirm({
+      title: "切换控制模式",
+      message: `确认切换到 ${mode} 模式？`,
+      confirmLabel: `切换到 ${mode}`,
+      tone: "warn",
+      onConfirm: () => {
+        void post("/api/set-mode", { mode }).catch(() => undefined);
+      }
+    });
   };
 
   const actionExecuteLabel = planOnly ? "规划" : "执行";
@@ -280,185 +509,316 @@ function App() {
     return namedStates?.states.find((item) => item.name === selectedNamedState)?.positions ?? [];
   }, [namedStates, selectedNamedState]);
 
+  const activeAction = telemetry?.active_action;
+  const backendTarget = API_BASE_URL || "Vite proxy";
+  const bridgeStatusLabel = authInvalid ? "Auth required" : bridgeReachable ? "Bridge OK" : "Bridge Off";
+  const bridgeStatusTone = bridgeReachable && !authInvalid ? "good" : "bad";
+  const telemetryStatusLabel = connected ? "Telemetry" : "Telemetry Off";
+  const telemetryStatusTone = connected ? "good" : "warn";
+  const jointAge = telemetry?.latest_joint_age_sec;
+  const jointStale = jointAge != null && jointAge > 2;
+  const activeActionInFlight = Boolean(activeAction?.done === false && activeAction?.kind);
+  const motionServiceOffline = health?.motion_server?.get_state === false;
+  const serviceStopped = shutdownRequested || (bridgeReachable && motionServiceOffline);
+  const jointAgeText = jointAge == null
+    ? "n/a"
+    : jointStale
+      ? `stale ${jointAge.toFixed(1)}s`
+      : `${jointAge.toFixed(2)}s`;
+  const serviceStatusText = shutdownRequested
+    ? "等待机械臂服务停止"
+    : authInvalid
+      ? "token 无效，已暂停自动刷新"
+    : serviceStopped
+      ? "机械臂服务未启动或已停止"
+      : "服务运行中";
+  const allCoreReady = Boolean(
+    health?.controller_manager &&
+    health?.joint_state_recent &&
+    health?.motion_server?.movej &&
+    health?.motion_server?.movel
+  );
+  const healthSummaryValue = authInvalid
+    ? "Auth"
+    : !bridgeReachable
+      ? "Bridge Off"
+      : serviceStopped
+        ? "Motion Off"
+        : allCoreReady && !jointStale && !pollWarning
+          ? "Ready"
+          : "Degraded";
+  const healthSummaryDetail = authInvalid
+    ? serviceStatusText
+    : !bridgeReachable
+      ? "Web bridge 未连接"
+      : serviceStopped
+        ? serviceStatusText
+        : pollWarning
+          ? pollWarning
+          : health?.joint_state_recent === false
+            ? "关节状态未更新"
+            : `joint age ${jointAgeText}`;
+  const healthSummaryTone = authInvalid || !bridgeReachable || serviceStopped
+    ? "bad"
+    : allCoreReady && !jointStale && !pollWarning
+      ? "good"
+      : "warn";
+
   return (
-    <main className="app-shell">
-      <header className="topbar">
+    <main className={`app-shell ${planOnly ? "plan-mode" : "execute-mode"}`}>
+      <header className="command-header">
         <div>
           <div className="eyebrow">EasyArm A1</div>
           <h1>Web 调试台</h1>
         </div>
         <div className="topbar-actions">
-          <StatusPill label={connected ? "Telemetry" : "Disconnected"} tone={connected ? "good" : "bad"} icon={connected ? <Wifi /> : <WifiOff />} />
+          <StatusPill label={bridgeStatusLabel} tone={bridgeStatusTone} icon={bridgeReachable && !authInvalid ? <Wifi /> : <WifiOff />} />
+          <StatusPill label={telemetryStatusLabel} tone={telemetryStatusTone} icon={connected ? <Wifi /> : <WifiOff />} />
           <StatusPill label={state?.mode ?? "UNKNOWN"} tone={state?.mode === "POSITION" ? "good" : "warn"} icon={<Gauge />} />
-          <button className="danger-button" disabled={busyRequest} onClick={() => post("/api/stop")}>
-            <CircleStop /> Stop
+          <button
+            className="danger-button"
+            onClick={() => {
+              void requestStop().catch(() => undefined);
+            }}
+          >
+            <CircleStop /> {activeActionInFlight ? "取消动作" : "Stop"}
+          </button>
+          <button className="shutdown-button" disabled={busyRequest} onClick={requestSafeShutdown}>
+            <Power /> 安全关机
           </button>
         </div>
       </header>
 
-      <section className="token-bar">
-        <Lock size={17} />
-        <input value={draftToken} onChange={(event) => setDraftToken(event.target.value)} placeholder="web_token" type="password" />
-        <button onClick={submitToken}>保存 token</button>
-        <button className="ghost-button" onClick={refresh}>
-          <RefreshCw /> 刷新
-        </button>
-        {error && <span className="error-text">{error}</span>}
+      <section className="connection-strip">
+        <div className="connection-field">
+          <Lock size={17} />
+          <input value={draftToken} onChange={(event) => setDraftToken(event.target.value)} placeholder="web_token" type="password" />
+          <button onClick={submitToken}>保存 token</button>
+        </div>
+        <div className="connection-meta">
+          <span>{backendTarget}</span>
+          <button className="ghost-button" onClick={refresh}>
+            <RefreshCw /> 刷新
+          </button>
+        </div>
+        {error && <span className={authInvalid ? "auth-text" : "error-text"}>{error}</span>}
+        {(serviceStopped || authInvalid || pollWarning) && !error && (
+          <span className="service-warning">{authInvalid ? serviceStatusText : pollWarning || serviceStatusText}</span>
+        )}
       </section>
 
-      <section className="grid dashboard-grid">
-        <Panel title="系统状态" icon={<Activity />}>
-          <Metric label="mode" value={state?.mode ?? "UNKNOWN"} />
-          <Metric label="busy" value={state?.busy ? "true" : "false"} />
-          <Metric label="active task" value={state?.active_task || "idle"} />
-          <Metric label="joint age" value={telemetry?.latest_joint_age_sec == null ? "n/a" : `${telemetry.latest_joint_age_sec.toFixed(2)}s`} />
-          <Metric label="mock hardware" value={health?.is_mock_hardware ?? "unknown"} />
-        </Panel>
+      <section className="summary-grid">
+        <SummaryCard
+          icon={<Activity />}
+          label="系统"
+          value={state?.busy ? "Busy" : "Idle"}
+          detail={`task: ${state?.active_task || "idle"}`}
+          tone={state?.busy ? "warn" : "good"}
+        />
+        <SummaryCard
+          icon={<ShieldCheck />}
+          label="健康"
+          value={healthSummaryValue}
+          detail={healthSummaryDetail}
+          tone={healthSummaryTone}
+        />
+        <SummaryCard
+          icon={<Loader2 />}
+          label="动作"
+          value={activeAction?.kind || "None"}
+          detail={activeAction?.message || activeAction?.state || "idle"}
+          tone={activeAction?.done === false ? "warn" : "neutral"}
+        />
+        <SummaryCard
+          icon={<Gauge />}
+          label="运动模式"
+          value={planOnly ? "规划" : "执行"}
+          detail={planOnly ? "不会下发真实运动" : "会下发真实运动"}
+          tone={planOnly ? "good" : "bad"}
+        />
+      </section>
 
-        <Panel title="健康检查" icon={<ShieldCheck />}>
-          <Metric label="controller manager" value={health?.controller_manager ? "ready" : "not ready"} />
-          <Metric label="joint state" value={health?.joint_state_recent ? "recent" : "stale"} />
-          <Metric label="movej" value={health?.motion_server?.movej ? "ready" : "not ready"} />
-          <Metric label="movel" value={health?.motion_server?.movel ? "ready" : "not ready"} />
-          <Metric label="reserved" value={`${health?.servo_state ?? "reserved"} / ${health?.trajectory_preview ?? "reserved"}`} />
-        </Panel>
-
-        <Panel title="Controllers" icon={<ListChecks />}>
-          <div className="controller-list">
-            {(controllers?.controllers ?? []).map((controller) => (
-              <div className="controller-row" key={controller.name}>
-                <span>{controller.name}</span>
-                <strong>{controller.state}</strong>
+      <section className="workspace-grid">
+        <div className="workspace-primary">
+          <Panel title="运动控制台" icon={<Gauge />} className="control-console">
+            <div className="control-head">
+              <div className="mode-switch" role="group" aria-label="运动命令模式">
+                <button type="button" className={planOnly ? "active" : ""} onClick={() => setPlanOnly(true)}>
+                  规划
+                </button>
+                <button type="button" className={!planOnly ? "active execute" : ""} onClick={enableExecuteMode}>
+                  执行
+                </button>
               </div>
-            ))}
-          </div>
-        </Panel>
-      </section>
+              <div className={`mode-note ${planOnly ? "safe" : "danger"}`}>
+                {planOnly ? "当前只做 MoveIt 规划，不执行真实运动。" : "执行模式会下发真实运动，请确认机械臂环境安全。"}
+              </div>
+            </div>
 
-      <section className="grid main-grid">
-        <Panel title="关节状态" icon={<SlidersHorizontal />}>
-          <div className="joint-table">
-            {JOINT_NAMES.map((name) => {
-              const index = joints?.names.indexOf(name) ?? -1;
-              return (
-                <div className="joint-row" key={name}>
-                  <span>{name}</span>
-                  <strong>{numberText(index >= 0 ? joints?.positions[index] : undefined)}</strong>
-                  <small>{numberText(index >= 0 ? joints?.velocities[index] : undefined)} rad/s</small>
-                </div>
-              );
-            })}
-          </div>
-        </Panel>
+            <div className="parameter-grid">
+              <Range label="velocity" value={velocityScale} setValue={setVelocityScale} />
+              <Range label="acceleration" value={accelScale} setValue={setAccelScale} />
+              <div className="mode-buttons">
+                {["POSITION", "IDLE", "FREE_DRIVE"].map((mode) => (
+                  <button
+                    key={mode}
+                    className={state?.mode === mode ? "soft-active-button" : "ghost-button"}
+                    onClick={() => requestModeChange(mode)}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Panel>
 
-        <Panel title="末端位姿" icon={<Radio />}>
-          <Metric label="frame" value={pose?.frame_id ?? "base_link"} />
-          <Metric label="x y z" value={`${numberText(pose?.position.x)} ${numberText(pose?.position.y)} ${numberText(pose?.position.z)}`} />
-          <Metric label="qx qy qz qw" value={`${numberText(pose?.orientation.x)} ${numberText(pose?.orientation.y)} ${numberText(pose?.orientation.z)} ${numberText(pose?.orientation.w)}`} />
-          <button className="ghost-button" onClick={() => pose && setServoL({ x: pose.position.x, y: pose.position.y, z: pose.position.z, qx: pose.orientation.x, qy: pose.orientation.y, qz: pose.orientation.z, qw: pose.orientation.w })}>
-            复制到 ServoL
-          </button>
-        </Panel>
-
-        <Panel title="动作反馈" icon={<Loader2 />}>
-          <Metric label="kind" value={telemetry?.active_action.kind || "idle"} />
-          <Metric label="state" value={telemetry?.active_action.state ?? "idle"} />
-          <Metric label="message" value={telemetry?.active_action.message || "-"} />
-          <div className="feedback-list">
-            {(telemetry?.active_action.feedback ?? []).slice(-6).map((item, index) => (
-              <span key={`${item}-${index}`}>{item}</span>
-            ))}
-          </div>
-          <button className="ghost-button" onClick={() => post("/api/actions/active/cancel")}>取消当前 action</button>
-        </Panel>
-      </section>
-
-      <section className="control-layout">
-        <Panel title="运动参数" icon={<Gauge />}>
-          <label className="toggle-line">
-            <input type="checkbox" checked={planOnly} onChange={(event) => setPlanOnly(event.target.checked)} />
-            plan-only 默认开启
-          </label>
-          <Range label="velocity" value={velocityScale} setValue={setVelocityScale} />
-          <Range label="acceleration" value={accelScale} setValue={setAccelScale} />
-          <div className="mode-buttons">
-            {["POSITION", "IDLE", "DRAG"].map((mode) => (
+          <section className="motion-grid">
+            <Panel title="MoveJ" icon={<Send />} className="motion-card">
+              <NumberGrid values={moveJ} onChange={setMoveJ} labels={JOINT_NAMES} step={0.01} />
               <button
-                key={mode}
-                className="ghost-button"
-                onClick={() => requireConfirm(`切换到 ${mode} 模式？`) && post("/api/set-mode", { mode })}
+                disabled={busyRequest}
+                onClick={() => {
+                  void post("/api/movej", {
+                    joints: moveJ,
+                    velocity_scale: velocityScale,
+                    acceleration_scale: accelScale,
+                    execute: !planOnly
+                  }).catch(() => undefined);
+                }}
               >
-                {mode}
+                <Play /> {actionExecuteLabel} MoveJ
               </button>
-            ))}
-          </div>
-        </Panel>
+            </Panel>
 
-        <Panel title="MoveJ" icon={<Send />}>
-          <NumberGrid values={moveJ} onChange={setMoveJ} labels={JOINT_NAMES} step={0.01} />
-          <button
-            disabled={busyRequest}
-            onClick={() =>
-              (planOnly || requireConfirm("确认执行 MoveJ？")) &&
-              post("/api/movej", { joints: moveJ, velocity_scale: velocityScale, acceleration_scale: accelScale, execute: !planOnly })
-            }
-          >
-            <Play /> {actionExecuteLabel} MoveJ
-          </button>
-        </Panel>
+            <Panel title="MoveL" icon={<Send />} className="motion-card">
+              <PoseEditor value={moveL} onChange={setMoveL} />
+              <button
+                disabled={busyRequest}
+                onClick={() => {
+                  void post("/api/movel", {
+                    ...moveL,
+                    frame_id: "base_link",
+                    velocity_scale: velocityScale,
+                    acceleration_scale: accelScale,
+                    execute: !planOnly
+                  }).catch(() => undefined);
+                }}
+              >
+                <Play /> {actionExecuteLabel} MoveL
+              </button>
+            </Panel>
 
-        <Panel title="MoveL" icon={<Send />}>
-          <PoseEditor value={moveL} onChange={setMoveL} />
-          <button
-            disabled={busyRequest}
-            onClick={() =>
-              (planOnly || requireConfirm("确认执行 MoveL？")) &&
-              post("/api/movel", { ...moveL, frame_id: "base_link", velocity_scale: velocityScale, acceleration_scale: accelScale, execute: !planOnly })
-            }
-          >
-            <Play /> {actionExecuteLabel} MoveL
-          </button>
-        </Panel>
+            <Panel title="Named State" icon={<ListChecks />} className="motion-card compact-motion-card">
+              <select value={selectedNamedState} onChange={(event) => setSelectedNamedState(event.target.value)}>
+                {(namedStates?.states ?? []).map((item) => (
+                  <option key={item.name} value={item.name}>{item.name}</option>
+                ))}
+              </select>
+              <div className="named-values">{activeNamedValues.map((value) => numberText(value)).join(" ") || "n/a"}</div>
+              <button
+                disabled={busyRequest || !selectedNamedState}
+                onClick={() => {
+                  void post("/api/move-named-state", {
+                    name: selectedNamedState,
+                    velocity_scale: velocityScale,
+                    acceleration_scale: accelScale,
+                    execute: !planOnly
+                  }).catch(() => undefined);
+                }}
+              >
+                <Play /> {actionExecuteLabel} Named State
+              </button>
+            </Panel>
+          </section>
 
-        <Panel title="Named State" icon={<ListChecks />}>
-          <select value={selectedNamedState} onChange={(event) => setSelectedNamedState(event.target.value)}>
-            {(namedStates?.states ?? []).map((item) => (
-              <option key={item.name} value={item.name}>{item.name}</option>
-            ))}
-          </select>
-          <div className="named-values">{activeNamedValues.map((value) => numberText(value)).join(" ") || "n/a"}</div>
-          <button
-            disabled={busyRequest || !selectedNamedState}
-            onClick={() =>
-              (planOnly || requireConfirm(`确认运动到 ${selectedNamedState}？`)) &&
-              post("/api/move-named-state", { name: selectedNamedState, velocity_scale: velocityScale, acceleration_scale: accelScale, execute: !planOnly })
-            }
-          >
-            <Play /> {actionExecuteLabel} Named State
-          </button>
-        </Panel>
-      </section>
+          <details className="panel stream-section">
+            <summary>
+              <span><Gauge /> 实时控制</span>
+              <small>Speed / Servo 按住发送，松开 Halt</small>
+            </summary>
+            <div className="stream-grid">
+              <div className="stream-card">
+                <div className="subpanel-title">SpeedJ</div>
+                <NumberGrid values={speedJ} onChange={setSpeedJ} labels={JOINT_NAMES} step={0.005} />
+                <StreamButtons onStart={() => sendStream({ type: "speedj", velocities: speedJ })} onStop={() => sendStream({ type: "halt" })} />
+              </div>
 
-      <section className="control-layout stream-layout">
-        <Panel title="SpeedJ" icon={<Gauge />}>
-          <NumberGrid values={speedJ} onChange={setSpeedJ} labels={JOINT_NAMES} step={0.005} />
-          <StreamButtons onStart={() => sendStream({ type: "speedj", velocities: speedJ })} onStop={() => sendStream({ type: "halt" })} />
-        </Panel>
+              <div className="stream-card">
+                <div className="subpanel-title">SpeedL</div>
+                <NumberGrid values={speedL} onChange={setSpeedL} labels={["vx", "vy", "vz", "wx", "wy", "wz"]} step={0.005} />
+                <StreamButtons onStart={() => sendStream({ type: "speedl", twist: speedL, frame_id: "base_link" })} onStop={() => sendStream({ type: "halt" })} />
+              </div>
 
-        <Panel title="SpeedL" icon={<Gauge />}>
-          <NumberGrid values={speedL} onChange={setSpeedL} labels={["vx", "vy", "vz", "wx", "wy", "wz"]} step={0.005} />
-          <StreamButtons onStart={() => sendStream({ type: "speedl", twist: speedL, frame_id: "base_link" })} onStop={() => sendStream({ type: "halt" })} />
-        </Panel>
+              <div className="stream-card">
+                <div className="subpanel-title">ServoJ</div>
+                <NumberGrid values={servoJ} onChange={setServoJ} labels={JOINT_NAMES} step={0.01} />
+                <StreamButtons onStart={() => sendStream({ type: "servoj", joints: servoJ })} onStop={() => sendStream({ type: "halt" })} />
+              </div>
 
-        <Panel title="ServoJ" icon={<Gauge />}>
-          <NumberGrid values={servoJ} onChange={setServoJ} labels={JOINT_NAMES} step={0.01} />
-          <StreamButtons onStart={() => sendStream({ type: "servoj", joints: servoJ })} onStop={() => sendStream({ type: "halt" })} />
-        </Panel>
+              <div className="stream-card">
+                <div className="subpanel-title">ServoL</div>
+                <PoseEditor value={servoL} onChange={setServoL} />
+                <StreamButtons onStart={() => sendStream({ type: "servol", ...servoL, frame_id: "base_link" })} onStop={() => sendStream({ type: "halt" })} />
+              </div>
+            </div>
+          </details>
+        </div>
 
-        <Panel title="ServoL" icon={<Gauge />}>
-          <PoseEditor value={servoL} onChange={setServoL} />
-          <StreamButtons onStart={() => sendStream({ type: "servol", ...servoL, frame_id: "base_link" })} onStop={() => sendStream({ type: "halt" })} />
-        </Panel>
+        <aside className="workspace-side">
+          <Panel title="关节状态" icon={<SlidersHorizontal />}>
+            <div className="joint-table">
+              {JOINT_NAMES.map((name) => {
+                const index = joints?.names.indexOf(name) ?? -1;
+                return (
+                  <div className="joint-row" key={name}>
+                    <span>{name}</span>
+                    <strong>{numberText(index >= 0 ? joints?.positions[index] : undefined)}</strong>
+                    <small>{numberText(index >= 0 ? joints?.velocities[index] : undefined)} rad/s</small>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+
+          <Panel title="末端位姿" icon={<Radio />}>
+            <Metric label="frame" value={pose?.frame_id ?? "base_link"} />
+            <Metric label="x y z" value={`${numberText(pose?.position.x)} ${numberText(pose?.position.y)} ${numberText(pose?.position.z)}`} />
+            <Metric label="qx qy qz qw" value={`${numberText(pose?.orientation.x)} ${numberText(pose?.orientation.y)} ${numberText(pose?.orientation.z)} ${numberText(pose?.orientation.w)}`} />
+            <button className="ghost-button panel-action" onClick={() => pose && setServoL({ x: pose.position.x, y: pose.position.y, z: pose.position.z, qx: pose.orientation.x, qy: pose.orientation.y, qz: pose.orientation.z, qw: pose.orientation.w })}>
+              复制到 ServoL
+            </button>
+          </Panel>
+
+          <Panel title="动作反馈" icon={<Loader2 />}>
+            <Metric label="kind" value={activeAction?.kind || "idle"} />
+            <Metric label="state" value={activeAction?.state ?? "idle"} />
+            <Metric label="message" value={activeAction?.message || "-"} />
+            <div className="feedback-list">
+              {(activeAction?.feedback ?? []).slice(-6).map((item, index) => (
+                <span key={`${item}-${index}`}>{item}</span>
+              ))}
+            </div>
+            <button
+              className="ghost-button panel-action"
+              onClick={() => {
+                void post("/api/actions/active/cancel").catch(() => undefined);
+              }}
+            >
+              取消当前 action
+            </button>
+          </Panel>
+
+          <Panel title="Controllers" icon={<ListChecks />}>
+            <div className="controller-list">
+              {(controllers?.controllers ?? []).map((controller) => (
+                <div className="controller-row" key={controller.name}>
+                  <span>{controller.name}</span>
+                  <strong>{controller.state}</strong>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </aside>
       </section>
 
       <section className="log-panel">
@@ -472,6 +832,33 @@ function App() {
           ))}
         </div>
       </section>
+
+      {confirmDialog && (
+        <div className="confirm-backdrop" role="presentation" onMouseDown={closeConfirm}>
+          <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className={`confirm-icon ${confirmDialog.tone}`}>
+              <AlertTriangle />
+            </div>
+            <div className="confirm-content">
+              <h2 id="confirm-title">{confirmDialog.title}</h2>
+              <p>{confirmDialog.message}</p>
+              <div className="confirm-actions">
+                <button className="ghost-button" onClick={closeConfirm}>取消</button>
+                <button
+                  className={confirmDialog.tone === "danger" ? "danger-button" : "soft-active-button"}
+                  onClick={() => {
+                    const action = confirmDialog.onConfirm;
+                    closeConfirm();
+                    action();
+                  }}
+                >
+                  {confirmDialog.confirmLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -480,9 +867,44 @@ function StatusPill({ label, tone, icon }: { label: string; tone: "good" | "warn
   return <span className={`status-pill ${tone}`}>{icon}{label}</span>;
 }
 
-function Panel({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function SummaryCard({
+  icon,
+  label,
+  value,
+  detail,
+  tone
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  detail: string;
+  tone: "good" | "warn" | "bad" | "neutral";
+}) {
   return (
-    <section className="panel">
+    <article className={`summary-card ${tone}`}>
+      <div className="summary-icon">{icon}</div>
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </div>
+    </article>
+  );
+}
+
+function Panel({
+  title,
+  icon,
+  children,
+  className = ""
+}: {
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`panel ${className}`}>
       <div className="panel-title">{icon}{title}</div>
       {children}
     </section>
@@ -596,8 +1018,12 @@ function StreamButtons({ onStart, onStop }: { onStart: () => void; onStop: () =>
   );
 }
 
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const rootElement = document.getElementById("root");
+
+if (!rootElement) {
+  throw new Error("root element not found");
+}
+
+const app = <App />;
+
+createRoot(rootElement).render(import.meta.env.DEV ? app : <React.StrictMode>{app}</React.StrictMode>);
