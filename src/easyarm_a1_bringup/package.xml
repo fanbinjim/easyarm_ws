@@ -18,6 +18,7 @@
   <depend>easyarm_hardware</depend>
   <depend>easyarm_interfaces</depend>
   <depend>easyarm_motion_server</depend>
+  <depend>easyarm_web_bridge</depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>moveit_servo</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>

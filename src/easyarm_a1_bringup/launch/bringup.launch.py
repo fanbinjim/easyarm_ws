@@ -6,7 +6,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -27,6 +27,10 @@ def generate_launch_description():
     debug_enable = LaunchConfiguration("debug_enable", default="false")
     rviz = LaunchConfiguration("rviz", default="false")
     moveit_servo = LaunchConfiguration("moveit_servo", default="false")
+    web = LaunchConfiguration("web", default="false")
+    web_backend_host = LaunchConfiguration("web_backend_host", default="127.0.0.1")
+    web_backend_port = LaunchConfiguration("web_backend_port", default="8000")
+    web_token = LaunchConfiguration("web_token", default="")
     publish_frequency = LaunchConfiguration("publish_frequency", default="15.0")
     easyarm_urdf_path = LaunchConfiguration("easyarm_urdf_path")
 
@@ -180,6 +184,21 @@ def generate_launch_description():
         ],
     )
 
+    web_bridge = Node(
+        package="easyarm_web_bridge",
+        executable="easyarm_web_bridge",
+        name="easyarm_web_bridge",
+        output="screen",
+        parameters=[
+            {
+                "host": web_backend_host,
+                "port": web_backend_port,
+                "token": web_token,
+            }
+        ],
+        condition=IfCondition(web),
+    )
+
     servo_params = {
         "moveit_servo": load_yaml(
             "easyarm_a1_moveit_config",
@@ -244,6 +263,26 @@ def generate_launch_description():
                 description="Start MoveIt Servo for SpeedJ/SpeedL teleoperation.",
             ),
             DeclareLaunchArgument(
+                "web",
+                default_value="false",
+                description="Start the EasyArm web bridge backend.",
+            ),
+            DeclareLaunchArgument(
+                "web_backend_host",
+                default_value="127.0.0.1",
+                description="Host address for the EasyArm web bridge backend.",
+            ),
+            DeclareLaunchArgument(
+                "web_backend_port",
+                default_value="8000",
+                description="Port for the EasyArm web bridge backend.",
+            ),
+            DeclareLaunchArgument(
+                "web_token",
+                default_value=EnvironmentVariable("EASYARM_WEB_TOKEN", default_value=""),
+                description="Required token for browser access when web:=true.",
+            ),
+            DeclareLaunchArgument(
                 "easyarm_urdf_path",
                 default_value=default_urdf_path,
                 description="URDF/Xacro file used by easyarm_a1.urdf.xacro and easyarm_hardware.",
@@ -271,7 +310,7 @@ def generate_launch_description():
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=arm_controller_spawner,
-                    on_exit=[motion_server, servo_node],
+                    on_exit=[motion_server, servo_node, web_bridge],
                 )
             ),
             rviz_node,
