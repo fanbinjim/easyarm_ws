@@ -86,6 +86,7 @@ class EasyArmWebBridge(Node):
         self.declare_parameter("port", int(os.environ.get("EASYARM_WEB_BACKEND_PORT", "8000")))
         self.declare_parameter("token", os.environ.get("EASYARM_WEB_TOKEN", ""))
         self.declare_parameter("request_timeout_sec", 5.0)
+        self.declare_parameter("stream_idle_timeout_sec", 0.75)
 
         self._lock = threading.Lock()
         self._latest_joint_state: Optional[JointState] = None
@@ -93,6 +94,8 @@ class EasyArmWebBridge(Node):
         self._rosout: List[Dict[str, Any]] = []
         self._active_action = ActionSnapshot()
         self._active_goal_handle = None
+        self._active_stream_kind = ""
+        self._last_stream_command_time = 0.0
 
         self.movej_client = ActionClient(self, MoveJ, "/easyarm/movej")
         self.movel_client = ActionClient(self, MoveL, "/easyarm/movel")
@@ -132,6 +135,10 @@ class EasyArmWebBridge(Node):
     @property
     def request_timeout_sec(self) -> float:
         return float(self.get_parameter("request_timeout_sec").value)
+
+    @property
+    def stream_idle_timeout_sec(self) -> float:
+        return float(self.get_parameter("stream_idle_timeout_sec").value)
 
     def _handle_joint_state(self, message: JointState) -> None:
         with self._lock:
@@ -393,25 +400,67 @@ class EasyArmWebBridge(Node):
         message.pose.orientation.w = float(orientation.get("w", payload.get("qw", 1.0)))
         return message
 
+    def _mark_stream_command(self, kind: str) -> None:
+        with self._lock:
+            self._active_stream_kind = kind
+            self._last_stream_command_time = _now()
+
+    def _consume_active_stream_kind(self) -> str:
+        with self._lock:
+            kind = self._active_stream_kind
+            age = _now() - self._last_stream_command_time
+            if not kind or age > self.stream_idle_timeout_sec:
+                self._active_stream_kind = ""
+                self._last_stream_command_time = 0.0
+                return ""
+            self._active_stream_kind = ""
+            self._last_stream_command_time = 0.0
+            return kind
+
     def publish_stream_command(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         command_type = str(payload.get("type", "")).lower()
         if command_type == "speedj":
-            self.speedj_pub.publish(self.make_joint_jog(payload.get("velocities", [])))
+            message = self.make_joint_jog(payload.get("velocities", []))
+            self._mark_stream_command(command_type)
+            self.speedj_pub.publish(message)
         elif command_type == "speedl":
-            self.speedl_pub.publish(self.make_twist(payload.get("twist", payload.get("values", [])), payload.get("frame_id", "base_link")))
+            message = self.make_twist(
+                payload.get("twist", payload.get("values", [])),
+                payload.get("frame_id", "base_link"),
+            )
+            self._mark_stream_command(command_type)
+            self.speedl_pub.publish(message)
         elif command_type == "servoj":
-            self.servoj_pub.publish(self.make_servoj(payload.get("joints", [])))
+            message = self.make_servoj(payload.get("joints", []))
+            self._mark_stream_command(command_type)
+            self.servoj_pub.publish(message)
         elif command_type == "servol":
-            self.servol_pub.publish(self.make_servol(payload))
+            message = self.make_servol(payload)
+            self._mark_stream_command(command_type)
+            self.servol_pub.publish(message)
         elif command_type == "halt":
-            self.publish_halt()
+            halted = self.stop_stream()
+            return {"success": True, "message": "halted active stream" if halted else "no active stream"}
         else:
             raise ValueError(f"Unknown stream command type '{command_type}'")
         return {"success": True, "message": "published"}
 
-    def publish_halt(self) -> None:
-        self.speedj_pub.publish(self.make_joint_jog([0.0] * 6))
-        self.speedl_pub.publish(self.make_twist([0.0] * 6))
+    def publish_halt(self) -> bool:
+        kind = self._consume_active_stream_kind()
+        if not kind:
+            self.get_logger().debug("Ignore stream halt: no active stream command")
+            return False
+        if kind == "speedj":
+            self.speedj_pub.publish(self.make_joint_jog([0.0] * 6))
+        elif kind == "speedl":
+            self.speedl_pub.publish(self.make_twist([0.0] * 6))
+        return True
+
+    def stop_stream(self) -> bool:
+        halted = self.publish_halt()
+        if halted:
+            self.stop()
+        return halted
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -572,9 +621,8 @@ def create_app(bridge: EasyArmWebBridge) -> FastAPI:
                 except Exception as exc:
                     await websocket.send_json({"success": False, "message": str(exc)})
         except WebSocketDisconnect:
-            bridge.publish_halt()
             try:
-                bridge.stop()
+                bridge.stop_stream()
             except Exception:
                 pass
 
