@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import threading
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -608,6 +609,43 @@ class EasyArmWebBridge(Node):
             "description_source": "robot_state_publisher",
         }
 
+    def _ensure_robot_description_cache(self) -> Optional[str]:
+        if self._robot_description_cache is not None:
+            return self._robot_description_cache
+        try:
+            request = GetParameters.Request()
+            request.names = ["robot_description"]
+            result = self._call_service(
+                self.robot_description_client, request,
+                timeout=self.request_timeout_sec,
+            )
+            if not result.values or not result.values[0].string_value:
+                return None
+            urdf_xml = result.values[0].string_value
+            urdf_xml = _rewrite_package_urls(urdf_xml)
+            self._robot_description_cache = urdf_xml
+            return urdf_xml
+        except Exception:
+            return None
+
+    def _detect_mock_hardware(self) -> Optional[bool]:
+        urdf = self._ensure_robot_description_cache()
+        if urdf is None:
+            return None
+        try:
+            root = ET.fromstring(urdf)
+            for param in root.iter("param"):
+                if param.get("name") == "use_mock_hardware":
+                    value = (param.text or "").strip().lower()
+                    if value == "true":
+                        return True
+                    if value == "false":
+                        return False
+                    return None
+        except ET.ParseError:
+            pass
+        return None
+
     def get_robot_description(self) -> Response:
         if self._robot_description_cache is not None:
             urdf_xml = self._robot_description_cache
@@ -690,6 +728,7 @@ class EasyArmWebBridge(Node):
     def health(self) -> Dict[str, Any]:
         with self._lock:
             joint_ok = self._latest_joint_state is not None and (_now() - self._latest_joint_state_time) < 1.0
+        mock = self._detect_mock_hardware()
         return {
             "success": True,
             "message": "OK",
@@ -702,7 +741,7 @@ class EasyArmWebBridge(Node):
             },
             "controller_manager": self.list_controllers_client.service_is_ready(),
             "joint_state_recent": joint_ok,
-            "is_mock_hardware": "unknown",
+            "is_mock_hardware": "unknown" if mock is None else str(mock).lower(),
             "servo_state": "reserved",
             "trajectory_preview": "reserved",
         }
