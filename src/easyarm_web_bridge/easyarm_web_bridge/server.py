@@ -1,6 +1,8 @@
 import argparse
 import asyncio
+import logging
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -10,14 +12,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import rclpy
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from control_msgs.msg import JointJog
 from controller_manager_msgs.srv import ListControllers
 from easyarm_interfaces.action import MoveJ, MoveL, MoveNamedState
 from easyarm_interfaces.srv import CancelActiveAction, GetJoints, GetPose, GetState, ListNamedState, SetMode, Stop
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from rcl_interfaces.msg import Log
+from rcl_interfaces.srv import GetParameters
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -82,6 +87,33 @@ def _joint_state_to_dict(message: JointState) -> Dict[str, Any]:
     }
 
 
+_PACKAGE_URL_PATTERN = re.compile(r'package://([^/]+)/([^"]+)')
+
+_MIME_EXT = {
+    ".stl": "model/stl",
+    ".dae": "model/vnd.collada+xml",
+    ".obj": "model/obj",
+    ".mtl": "text/plain",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
+}
+_MIME_DEFAULT = "application/octet-stream"
+
+
+def _rewrite_package_urls(urdf_xml: str) -> str:
+    return _PACKAGE_URL_PATTERN.sub(
+        r"/api/robot/assets/\1/\2",
+        urdf_xml,
+    )
+
+
+def _detect_asset_media_type(suffix: str) -> str:
+    return _MIME_EXT.get(suffix, _MIME_DEFAULT)
+
+
 class EasyArmWebBridge(Node):
     def __init__(self):
         super().__init__("easyarm_web_bridge")
@@ -125,6 +157,12 @@ class EasyArmWebBridge(Node):
             ListControllers,
             "/controller_manager/list_controllers",
         )
+        self.robot_description_client = self.create_client(
+            GetParameters,
+            "/robot_state_publisher/get_parameters",
+        )
+
+        self._robot_description_cache: Optional[str] = None
 
         self.speedj_pub = self.create_publisher(JointJog, "/easyarm/speedj_cmd", 10)
         self.speedl_pub = self.create_publisher(TwistStamped, "/easyarm/speedl_cmd", 10)
@@ -554,6 +592,77 @@ class EasyArmWebBridge(Node):
             self.stop()
         return halted
 
+    def get_robot_model(self) -> Dict[str, Any]:
+        joint_names = list(JOINT_NAMES)
+        with self._lock:
+            if self._latest_joint_state is not None:
+                joint_names = list(self._latest_joint_state.name)
+        return {
+            "success": True,
+            "message": "OK",
+            "urdf_url": "/api/robot/description",
+            "asset_base_url": "/api/robot/assets",
+            "joint_state_source": "/ws/telemetry",
+            "joint_names": joint_names,
+            "root_link": "base_link",
+            "description_source": "robot_state_publisher",
+        }
+
+    def get_robot_description(self) -> Response:
+        if self._robot_description_cache is not None:
+            urdf_xml = self._robot_description_cache
+        else:
+            request = GetParameters.Request()
+            request.names = ["robot_description"]
+            try:
+                result = self._call_service(
+                    self.robot_description_client, request,
+                    timeout=self.request_timeout_sec,
+                )
+            except (RuntimeError, TimeoutError) as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"robot_description unavailable: {exc}",
+                )
+            if not result.values or not result.values[0].string_value:
+                raise HTTPException(
+                    status_code=503,
+                    detail="robot_description parameter not set on robot_state_publisher",
+                )
+            urdf_xml = result.values[0].string_value
+            urdf_xml = _rewrite_package_urls(urdf_xml)
+            self._robot_description_cache = urdf_xml
+
+        return Response(content=urdf_xml, media_type="application/xml")
+
+    def resolve_package_asset(self, package_name: str, asset_path: str) -> FileResponse:
+        if not package_name or "/" in package_name or ".." in package_name:
+            raise HTTPException(status_code=400, detail="invalid package_name")
+        if not asset_path or asset_path.startswith("/"):
+            raise HTTPException(status_code=400, detail="invalid asset_path")
+
+        try:
+            share_dir = get_package_share_directory(package_name)
+        except (PackageNotFoundError, LookupError) as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"package '{package_name}' not found",
+            )
+
+        share_real = Path(share_dir).resolve()
+        target = (Path(share_dir) / asset_path).resolve()
+
+        try:
+            target.relative_to(share_real)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="path traversal denied")
+
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail=f"asset not found: {asset_path}")
+
+        media_type = _detect_asset_media_type(target.suffix.lower())
+        return FileResponse(path=str(target), media_type=media_type)
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             joint_state = self._latest_joint_state
@@ -749,6 +858,26 @@ def create_app(bridge: EasyArmWebBridge) -> FastAPI:
     @app.get("/api/controllers", dependencies=[Depends(check_token)])
     async def controllers():
         return await call_ros(bridge.list_controllers)
+
+    @app.get("/api/robot/model", dependencies=[Depends(check_token)])
+    async def robot_model():
+        return await call_ros(bridge.get_robot_model)
+
+    @app.get("/api/robot/description", dependencies=[Depends(check_token)])
+    async def robot_description():
+        return await call_ros(bridge.get_robot_description)
+
+    @app.get("/api/robot/assets/{package_name}/{asset_path:path}", dependencies=[Depends(check_token)])
+    async def robot_asset(package_name: str, asset_path: str):
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, bridge.resolve_package_asset, package_name, asset_path)
+        except HTTPException:
+            raise
+        except PackageNotFoundError:
+            raise HTTPException(status_code=404, detail=f"package '{package_name}' not found")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.post("/api/set-mode", dependencies=[Depends(check_token)])
     async def set_mode(payload: Dict[str, Any]):
