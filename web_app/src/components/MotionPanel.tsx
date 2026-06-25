@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Play, Send, ListChecks, Gauge } from "lucide-react";
-import { Panel } from "../ui/Panel";
 import { PoseEditor, type PoseValues } from "../ui/PoseEditor";
 import { Range } from "../ui/Range";
 import type { JointTarget, NamedStateResponse } from "../api/types";
@@ -53,6 +52,7 @@ export function MotionPanel({
   const [moveJValues, setMoveJValues] = useState(DEFAULT_MOVEJ);
   const [moveLValues, setMoveLValues] = useState({ x: 0.25, y: 0, z: 0.25, qx: 0, qy: 0, qz: 0, qw: 1 });
   const [selectedNamed, setSelectedNamed] = useState("");
+  const [open, setOpen] = useState(true);
 
   const namedStatesList = namedStates?.states ?? [];
   const activeNamedValues = useMemo(
@@ -124,42 +124,48 @@ export function MotionPanel({
   };
 
   return (
-    <Panel title="运动控制台" icon={<Gauge />} className="control-console">
-      <div className="control-head">
-        <div className="mode-switch" role="group" aria-label="运动命令模式">
-          <button type="button" className={planOnly ? "active" : ""} onClick={() => onPlanOnlyChange(true)}>
-            规划
-          </button>
-          <button type="button" className={!planOnly ? "active execute" : ""} onClick={() => onPlanOnlyChange(false)}>
-            执行
-          </button>
+    <details className="panel stream-section control-console" open={open}>
+      <summary onClick={() => setOpen(!open)}>
+        <span><Gauge /> 运动控制台</span>
+        <small>{planOnly ? "规划模式，不下发真实运动" : "执行模式，会下发真实运动"}</small>
+      </summary>
+      <div className="motion-panel-body">
+        <div className="control-head">
+          <div className="mode-switch" role="group" aria-label="运动命令模式">
+            <button type="button" className={planOnly ? "active" : ""} onClick={() => onPlanOnlyChange(true)}>
+              规划
+            </button>
+            <button type="button" className={!planOnly ? "active execute" : ""} onClick={() => onPlanOnlyChange(false)}>
+              执行
+            </button>
+          </div>
+          <div className={`mode-note ${planOnly ? "safe" : "danger"}`}>
+            {planOnly ? "只做 MoveIt 规划，不执行真实运动" : "执行模式会下发真实运动，请确认环境安全"}
+          </div>
         </div>
-        <div className={`mode-note ${planOnly ? "safe" : "danger"}`}>
-          {planOnly ? "只做 MoveIt 规划，不执行真实运动" : "执行模式会下发真实运动，请确认环境安全"}
+
+        <div className="parameter-grid">
+          <Range label="velocity" value={velocityScale} setValue={onVelocityChange} />
+          <Range label="acceleration" value={accelScale} setValue={onAccelChange} />
         </div>
-      </div>
 
-      <div className="parameter-grid">
-        <Range label="velocity" value={velocityScale} setValue={onVelocityChange} />
-        <Range label="acceleration" value={accelScale} setValue={onAccelChange} />
-      </div>
+        <div className="motion-tabs" role="tablist">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              role="tab"
+              className={`motion-tab ${tab === t.key ? "active" : ""}`}
+              onClick={() => setTab(t.key)}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-      <div className="motion-tabs" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            role="tab"
-            className={`motion-tab ${tab === t.key ? "active" : ""}`}
-            onClick={() => setTab(t.key)}
-          >
-            {t.icon}
-            {t.label}
-          </button>
-        ))}
+        {tabContent[tab]}
       </div>
-
-      {tabContent[tab]}
-    </Panel>
+    </details>
   );
 }
 

@@ -91,6 +91,10 @@ export type DebugLogsResponse = BasicResponse & {
   logs: DebugLogEntry[];
 };
 
+export type DebugDeleteResponse = BasicResponse & {
+  name: string;
+};
+
 export type DebugUploadResponse = BasicResponse & {
   log: DebugLogEntry;
 };

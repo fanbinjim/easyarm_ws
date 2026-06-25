@@ -2,6 +2,7 @@ import type {
   ActionResponse,
   CancelActionResponse,
   ControllerResponse,
+  DebugDeleteResponse,
   DebugDataResponse,
   DebugField,
   DebugLogsResponse,
@@ -146,6 +147,22 @@ export async function apiPost<T>(path: string, payload?: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export async function apiDelete<T>(path: string): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      "X-EasyArm-Token": _token,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    const detail = parseErrorDetail(response.status, text);
+    throw new ApiError(response.status, detail);
+  }
+  return response.json() as Promise<T>;
+}
+
 export async function apiUpload<T>(path: string, file: File): Promise<T> {
   const response = await fetch(apiUrl(path), {
     method: "POST",
@@ -237,6 +254,9 @@ const _api = {
   debugUpload(file: File): Promise<DebugUploadResponse> {
     const params = new URLSearchParams({ filename: file.name });
     return apiUpload<DebugUploadResponse>(`/api/debug/logs/upload?${params.toString()}`, file);
+  },
+  debugDelete(name: string): Promise<DebugDeleteResponse> {
+    return apiDelete<DebugDeleteResponse>(`/api/debug/logs/${encodeURIComponent(name)}`);
   },
   debugData(payload: {
     name: string;

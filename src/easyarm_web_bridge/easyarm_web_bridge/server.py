@@ -461,6 +461,22 @@ class EasyArmWebBridge(Node):
             filename=name,
         )
 
+    def delete_debug_log(self, name: str) -> Dict[str, Any]:
+        path = self.resolve_debug_log_path(name)
+        try:
+            status = self.get_debug_status()
+            if status.get("active") and Path(str(status.get("path", ""))).resolve() == path:
+                raise ValueError("cannot delete active debug log")
+        except (RuntimeError, TimeoutError):
+            pass
+
+        path.unlink()
+        return {
+            "success": True,
+            "message": "deleted",
+            "name": name,
+        }
+
     def begin_debug_log_upload(self, source_name: str) -> Dict[str, Path]:
         source_name = Path(source_name or "").name
         if source_name and not source_name.endswith(DEBUG_LOG_SUFFIX):
@@ -1212,6 +1228,18 @@ def create_app(bridge: EasyArmWebBridge) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/debug/logs/{name}", dependencies=[Depends(check_token)])
+    async def debug_log_delete(name: str):
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, bridge.delete_debug_log, name)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/api/debug/logs/{name}/data", dependencies=[Depends(check_token)])
     async def debug_log_data(

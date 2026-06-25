@@ -3,11 +3,10 @@ import { LineChart } from "echarts/charts";
 import { DataZoomComponent, GridComponent, LegendComponent, TitleComponent, TooltipComponent } from "echarts/components";
 import { init, use, type ECharts } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { BarChart3, Download, Maximize2, Play, RefreshCw, Square, Upload, X } from "lucide-react";
+import { BarChart3, Download, Maximize2, Play, RefreshCw, Square, Trash2, Upload, X } from "lucide-react";
 import { api, apiAssetUrl, ApiError, errorMessage } from "../api/client";
 import type { DebugDataPoint, DebugField, DebugLogEntry, DebugStatusResponse } from "../api/types";
 import { Panel } from "../ui/Panel";
-import { Metric } from "../ui/Metric";
 
 const DEBUG_FIELDS: DebugField[] = [
   "position_error",
@@ -90,12 +89,16 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
   const [logsLoading, setLogsLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
   const [uploadLoading, setUploadLoading] = useState(false);
+  const [deletingLog, setDeletingLog] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
   const [error, setError] = useState("");
   const [debugApiUnavailable, setDebugApiUnavailable] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const loggerSectionRef = useRef<HTMLElement>(null);
+  const [loggerSectionHeight, setLoggerSectionHeight] = useState<number | null>(null);
 
   const selectedLogEntry = useMemo(() => logs.find((item) => item.name === selectedLog) ?? null, [logs, selectedLog]);
+  const activeLogName = status?.path ? status.path.split("/").pop() ?? status.path : "-";
 
   const handleRequestError = useCallback((err: unknown) => {
     if (err instanceof ApiError && err.status === 404) {
@@ -110,9 +113,9 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
     setError(errorMessage(err));
   }, []);
 
-  const refreshStatus = useCallback(async () => {
+  const refreshStatus = useCallback(async (showLoading = true) => {
     if (!token) return;
-    setStatusLoading(true);
+    if (showLoading) setStatusLoading(true);
     try {
       setStatus(await api.debugStatus);
       setDebugApiUnavailable(false);
@@ -120,7 +123,7 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
     } catch (err) {
       handleRequestError(err);
     } finally {
-      setStatusLoading(false);
+      if (showLoading) setStatusLoading(false);
     }
   }, [handleRequestError, token]);
 
@@ -154,10 +157,29 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
   useEffect(() => {
     if (!token || debugApiUnavailable) return;
     const timer = window.setInterval(() => {
-      void refreshStatus();
+      void refreshStatus(false);
     }, 1500);
     return () => window.clearInterval(timer);
   }, [debugApiUnavailable, refreshStatus, token]);
+
+  useEffect(() => {
+    const element = loggerSectionRef.current;
+    if (!element) return;
+
+    const updateHeight = () => {
+      const nextHeight = Math.ceil(element.getBoundingClientRect().height);
+      setLoggerSectionHeight((current) => current === nextHeight ? current : nextHeight);
+    };
+
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(element);
+    window.addEventListener("resize", updateHeight);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateHeight);
+    };
+  }, []);
 
   const startRecording = async () => {
     if (!token || debugApiUnavailable) return;
@@ -205,6 +227,25 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
       if (uploadInputRef.current) {
         uploadInputRef.current.value = "";
       }
+    }
+  };
+
+  const deleteLog = async (name: string) => {
+    if (!token || debugApiUnavailable || deletingLog) return;
+    setDeletingLog(name);
+    setError("");
+    try {
+      await api.debugDelete(name);
+      setLogs((current) => current.filter((log) => log.name !== name));
+      if (selectedLog === name) {
+        setSelectedLog("");
+        setChartData([]);
+      }
+      setDebugApiUnavailable(false);
+    } catch (err) {
+      handleRequestError(err);
+    } finally {
+      setDeletingLog("");
     }
   };
 
@@ -264,59 +305,81 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
       {error && <div className="debug-error">{error}</div>}
 
       <div className="debug-grid">
-        <section className="debug-section">
+        <section ref={loggerSectionRef} className="debug-section logger-section">
           <div className="debug-section-title">Logger</div>
-          <div className="debug-status-grid">
-            <Metric label="active" value={status?.active ? "true" : "false"} />
-            <Metric label="file" value={status?.path ? status.path.split("/").pop() ?? status.path : "-"} />
-            <Metric label="written" value={String(status?.written_count ?? 0)} />
-            <Metric label="dropped" value={String(status?.dropped_count ?? 0)} />
+          <div className="logger-summary">
+            <div className="logger-metric">
+              <span>active</span>
+              <strong>{status?.active ? "true" : "false"}</strong>
+            </div>
+            <div className="logger-metric">
+              <span>written</span>
+              <strong>{status?.written_count ?? 0}</strong>
+            </div>
+            <div className="logger-metric">
+              <span>dropped</span>
+              <strong>{status?.dropped_count ?? 0}</strong>
+            </div>
+            <div className="logger-file">
+              <span>file</span>
+              <strong title={activeLogName}>{activeLogName}</strong>
+            </div>
           </div>
-          <div className="debug-actions">
+          <div className="debug-actions logger-actions">
             <button disabled={!token || debugApiUnavailable || status?.active === true || Boolean(recordLoading)} onClick={() => void startRecording()}>
-              <Play /> {recordLoading === "start" ? "Starting..." : "Start Recording"}
+              <Play /> {recordLoading === "start" ? "Starting..." : "Start"}
             </button>
             <button className="danger-button" disabled={!token || debugApiUnavailable || status?.active !== true || Boolean(recordLoading)} onClick={() => void stopRecording()}>
-              <Square /> {recordLoading === "stop" ? "Stopping..." : "Stop Recording"}
+              <Square /> {recordLoading === "stop" ? "Stopping..." : "Stop"}
             </button>
             <button className="ghost-button" disabled={!token || statusLoading} onClick={() => void refreshStatus()}>
-              <RefreshCw /> Status
+              <RefreshCw /> {statusLoading ? "Refreshing..." : "Status"}
             </button>
           </div>
         </section>
 
-        <section className="debug-section">
+        <section className="debug-section logs-section" style={loggerSectionHeight ? { height: loggerSectionHeight } : undefined}>
           <div className="debug-section-head">
             <div className="debug-section-title">Logs</div>
-            <button className="ghost-button" disabled={!token || logsLoading} onClick={() => void refreshLogs()}>
-              <RefreshCw /> {logsLoading ? "Refreshing..." : "Refresh"}
-            </button>
           </div>
           {logs.length === 0 ? (
             <div className="empty-hint">没有 debug bin 日志</div>
           ) : (
             <div className="debug-log-list">
               {logs.map((log) => (
-                <button
-                  key={log.name}
-                  className={`debug-log-row ${selectedLog === log.name ? "active" : ""}`}
-                  onClick={() => {
-                    setSelectedLog(log.name);
-                    setChartData([]);
-                  }}
-                >
-                  <span>{log.name}</span>
-                  <small>{formatBytes(log.size)} · {formatTime(log.mtime)}</small>
-                </button>
+                <div key={log.name} className={`debug-log-row ${selectedLog === log.name ? "active" : ""}`}>
+                  <button
+                    className="debug-log-select"
+                    onClick={() => {
+                      setSelectedLog(log.name);
+                      setChartData([]);
+                    }}
+                  >
+                    <span>{log.name}</span>
+                    <small>{formatBytes(log.size)} · {formatTime(log.mtime)}</small>
+                  </button>
+                  <button
+                    className="debug-log-delete"
+                    disabled={!token || debugApiUnavailable || Boolean(deletingLog)}
+                    title={`Delete ${log.name}`}
+                    aria-label={`Delete ${log.name}`}
+                    onClick={() => void deleteLog(log.name)}
+                  >
+                    <Trash2 />
+                  </button>
+                </div>
               ))}
             </div>
           )}
-          <div className="debug-actions">
+          <div className="debug-actions logs-actions">
             <a className={`download-link ${selectedLog ? "" : "disabled"}`} href={downloadHref} download={selectedLog || undefined}>
               <Download /> Download bin
             </a>
-            <button className="ghost-button" disabled={!token || debugApiUnavailable || uploadLoading} onClick={() => uploadInputRef.current?.click()}>
+            <button className="ghost-button upload-button" disabled={!token || debugApiUnavailable || uploadLoading} onClick={() => uploadInputRef.current?.click()}>
               <Upload /> {uploadLoading ? "Uploading..." : "Upload bin"}
+            </button>
+            <button className="ghost-button refresh-button" disabled={!token || logsLoading} onClick={() => void refreshLogs()}>
+              <RefreshCw /> {logsLoading ? "Refreshing..." : "Refresh"}
             </button>
             <input
               ref={uploadInputRef}
@@ -407,7 +470,10 @@ function AnalysisView({
         {fullscreen ? (
           <button className="ghost-button" onClick={onCloseFullscreen}><X /> Close</button>
         ) : (
-          <button className="ghost-button" onClick={onOpenFullscreen}><Maximize2 /> Fullscreen</button>
+          <button className="ghost-button fullscreen-button" onClick={onOpenFullscreen} aria-label="Fullscreen">
+            <Maximize2 />
+            <span>Fullscreen</span>
+          </button>
         )}
       </div>
       <div className="debug-form-grid multi">

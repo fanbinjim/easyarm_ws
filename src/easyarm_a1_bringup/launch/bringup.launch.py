@@ -259,7 +259,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "moveit_servo",
-                default_value="false",
+                default_value="true",
                 description="Start MoveIt Servo for SpeedJ/SpeedL teleoperation.",
             ),
             DeclareLaunchArgument(

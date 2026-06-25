@@ -39,6 +39,7 @@ function setNativeInputValue(input: HTMLInputElement, value: string): void {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   valueSetter?.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function AppInner() {
@@ -52,10 +53,10 @@ function AppInner() {
     const handleNumberWheel = (event: WheelEvent) => {
       const target = event.target;
       if (!(target instanceof HTMLInputElement) || target.type !== "number") return;
-      if (document.activeElement !== target) return;
 
       event.preventDefault();
       event.stopPropagation();
+      target.focus({ preventScroll: true });
 
       const step = target.step && target.step !== "any" ? Number(target.step) : 1;
       const delta = event.deltaY < 0 ? step : -step;
