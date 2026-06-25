@@ -91,6 +91,10 @@ export type DebugLogsResponse = BasicResponse & {
   logs: DebugLogEntry[];
 };
 
+export type DebugUploadResponse = BasicResponse & {
+  log: DebugLogEntry;
+};
+
 export type DebugField =
   | "position_error"
   | "smoothed_position_error"

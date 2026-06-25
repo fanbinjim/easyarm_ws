@@ -17,7 +17,7 @@ from ament_index_python.packages import PackageNotFoundError, get_package_share_
 from control_msgs.msg import JointJog
 from controller_manager_msgs.srv import ListControllers
 from easyarm_interfaces.action import MoveJ, MoveL, MoveNamedState
-from easyarm_hardware.debug_log_reader import iter_samples
+from easyarm_hardware.debug_log_reader import read_header, iter_samples
 from easyarm_interfaces.srv import (
     CancelActiveAction,
     GetDebugLoggerStatus,
@@ -30,7 +30,7 @@ from easyarm_interfaces.srv import (
     SetMode,
     Stop,
 )
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from geometry_msgs.msg import PoseStamped, TwistStamped
@@ -48,6 +48,8 @@ JOINT_NAMES = [f"Joint{index}" for index in range(1, 7)]
 DEBUG_LOG_DIR = Path("/dev/shm")
 DEBUG_LOG_PREFIX = "easyarm_log_"
 DEBUG_LOG_SUFFIX = ".bin"
+DEBUG_LOG_UPLOAD_PREFIX = "easyarm_log_uploaded_"
+DEBUG_LOG_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
 DEBUG_FIELDS = {
     "position_error",
     "smoothed_position_error",
@@ -150,6 +152,37 @@ def _debug_log_name_is_valid(name: str) -> bool:
         and "/" not in name
         and ".." not in name
     )
+
+
+def _uploaded_debug_log_path() -> Path:
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    path = DEBUG_LOG_DIR / f"{DEBUG_LOG_UPLOAD_PREFIX}{stamp}{DEBUG_LOG_SUFFIX}"
+    for index in range(1, 1000):
+        if not path.exists():
+            return path
+        path = DEBUG_LOG_DIR / f"{DEBUG_LOG_UPLOAD_PREFIX}{stamp}_{index:03d}{DEBUG_LOG_SUFFIX}"
+    raise RuntimeError("failed to allocate debug log upload path")
+
+
+def _debug_log_entry(path: Path) -> Dict[str, Any]:
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "path": str(path),
+        "size": int(stat.st_size),
+        "mtime": float(stat.st_mtime),
+    }
+
+
+def _list_local_debug_logs() -> List[Dict[str, Any]]:
+    if not DEBUG_LOG_DIR.exists():
+        return []
+    logs = []
+    for path in DEBUG_LOG_DIR.iterdir():
+        if not path.is_file() or not _debug_log_name_is_valid(path.name):
+            continue
+        logs.append(_debug_log_entry(path))
+    return sorted(logs, key=lambda item: item["mtime"], reverse=True)
 
 
 class EasyArmWebBridge(Node):
@@ -383,21 +416,28 @@ class EasyArmWebBridge(Node):
         return self._debug_status_to_dict(response)
 
     def list_debug_logs(self) -> Dict[str, Any]:
-        response = self._call_service(self.list_debug_logs_client, ListDebugLogs.Request())
-        logs = []
-        count = min(len(response.names), len(response.paths), len(response.sizes), len(response.mtimes))
-        for index in range(count):
-            logs.append({
-                "name": response.names[index],
-                "path": response.paths[index],
-                "size": int(response.sizes[index]),
-                "mtime": float(response.mtimes[index]),
-            })
-        return {
-            "success": bool(response.success),
-            "message": response.message,
-            "logs": logs,
-        }
+        try:
+            response = self._call_service(self.list_debug_logs_client, ListDebugLogs.Request())
+            logs = []
+            count = min(len(response.names), len(response.paths), len(response.sizes), len(response.mtimes))
+            for index in range(count):
+                logs.append({
+                    "name": response.names[index],
+                    "path": response.paths[index],
+                    "size": int(response.sizes[index]),
+                    "mtime": float(response.mtimes[index]),
+                })
+            return {
+                "success": bool(response.success),
+                "message": response.message,
+                "logs": logs,
+            }
+        except (RuntimeError, TimeoutError):
+            return {
+                "success": True,
+                "message": "OK",
+                "logs": _list_local_debug_logs(),
+            }
 
     def resolve_debug_log_path(self, name: str) -> Path:
         if not _debug_log_name_is_valid(name):
@@ -420,6 +460,37 @@ class EasyArmWebBridge(Node):
             media_type="application/octet-stream",
             filename=name,
         )
+
+    def begin_debug_log_upload(self, source_name: str) -> Dict[str, Path]:
+        source_name = Path(source_name or "").name
+        if source_name and not source_name.endswith(DEBUG_LOG_SUFFIX):
+            raise ValueError("debug log upload must be a .bin file")
+
+        DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        target = _uploaded_debug_log_path()
+        temporary = target.with_name(f".{target.name}.uploading")
+        return {"target": target, "temporary": temporary}
+
+    def finish_debug_log_upload(self, target: Path, temporary: Path, written: int) -> Dict[str, Any]:
+        try:
+            if written == 0:
+                raise ValueError("debug log upload is empty")
+
+            with temporary.open("rb") as input_file:
+                read_header(input_file)
+
+            temporary.rename(target)
+            return {
+                "success": True,
+                "message": "uploaded",
+                "log": _debug_log_entry(target),
+            }
+        except Exception:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def read_debug_log_data(
         self,
@@ -1104,6 +1175,33 @@ def create_app(bridge: EasyArmWebBridge) -> FastAPI:
     @app.get("/api/debug/logs", dependencies=[Depends(check_token)])
     async def debug_logs():
         return await call_ros(bridge.list_debug_logs)
+
+    @app.post("/api/debug/logs/upload", dependencies=[Depends(check_token)])
+    async def debug_log_upload(request: Request, filename: str = Query(default="")):
+        target: Optional[Path] = None
+        temporary: Optional[Path] = None
+        try:
+            upload_paths = bridge.begin_debug_log_upload(filename)
+            target = upload_paths["target"]
+            temporary = upload_paths["temporary"]
+            written = 0
+            with temporary.open("wb") as output:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if written > DEBUG_LOG_UPLOAD_MAX_BYTES:
+                        raise ValueError("debug log upload exceeds 200 MiB limit")
+                    output.write(chunk)
+            return bridge.finish_debug_log_upload(target, temporary, written)
+        except ValueError as exc:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/api/debug/logs/{name}/download", dependencies=[Depends(check_token)])
     async def debug_log_download(name: str):

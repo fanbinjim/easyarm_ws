@@ -3,7 +3,7 @@ import { LineChart } from "echarts/charts";
 import { DataZoomComponent, GridComponent, LegendComponent, TitleComponent, TooltipComponent } from "echarts/components";
 import { init, use, type ECharts } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { BarChart3, Download, Maximize2, Play, RefreshCw, Square, X } from "lucide-react";
+import { BarChart3, Download, Maximize2, Play, RefreshCw, Square, Upload, X } from "lucide-react";
 import { api, apiAssetUrl, ApiError, errorMessage } from "../api/client";
 import type { DebugDataPoint, DebugField, DebugLogEntry, DebugStatusResponse } from "../api/types";
 import { Panel } from "../ui/Panel";
@@ -89,9 +89,11 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
   const [recordLoading, setRecordLoading] = useState<"start" | "stop" | "">("");
   const [logsLoading, setLogsLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
+  const [uploadLoading, setUploadLoading] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [error, setError] = useState("");
   const [debugApiUnavailable, setDebugApiUnavailable] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   const selectedLogEntry = useMemo(() => logs.find((item) => item.name === selectedLog) ?? null, [logs, selectedLog]);
 
@@ -182,6 +184,27 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
       handleRequestError(err);
     } finally {
       setRecordLoading("");
+    }
+  };
+
+  const uploadBin = async (file: File | undefined) => {
+    if (!token || debugApiUnavailable || !file) return;
+    setUploadLoading(true);
+    setError("");
+    try {
+      const response = await api.debugUpload(file);
+      const logsResponse = await api.debugLogs;
+      setLogs(logsResponse.logs);
+      setSelectedLog(response.log.name);
+      setChartData([]);
+      setDebugApiUnavailable(false);
+    } catch (err) {
+      handleRequestError(err);
+    } finally {
+      setUploadLoading(false);
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = "";
+      }
     }
   };
 
@@ -292,6 +315,16 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
             <a className={`download-link ${selectedLog ? "" : "disabled"}`} href={downloadHref} download={selectedLog || undefined}>
               <Download /> Download bin
             </a>
+            <button className="ghost-button" disabled={!token || debugApiUnavailable || uploadLoading} onClick={() => uploadInputRef.current?.click()}>
+              <Upload /> {uploadLoading ? "Uploading..." : "Upload bin"}
+            </button>
+            <input
+              ref={uploadInputRef}
+              className="hidden-file-input"
+              type="file"
+              accept=".bin,application/octet-stream"
+              onChange={(event) => void uploadBin(event.currentTarget.files?.[0])}
+            />
           </div>
         </section>
       </div>

@@ -6,6 +6,7 @@ import type {
   DebugField,
   DebugLogsResponse,
   DebugStatusResponse,
+  DebugUploadResponse,
   HealthResponse,
   JointResponse,
   NamedStateResponse,
@@ -145,6 +146,23 @@ export async function apiPost<T>(path: string, payload?: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export async function apiUpload<T>(path: string, file: File): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-EasyArm-Token": _token,
+    },
+    body: file,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    const detail = parseErrorDetail(response.status, text);
+    throw new ApiError(response.status, detail);
+  }
+  return response.json() as Promise<T>;
+}
+
 function parseErrorDetail(status: number, body: string): string {
   try {
     const parsed = JSON.parse(body) as { detail?: unknown };
@@ -215,6 +233,10 @@ const _api = {
   },
   debugStop(): Promise<DebugStatusResponse> {
     return apiPost<DebugStatusResponse>("/api/debug/stop");
+  },
+  debugUpload(file: File): Promise<DebugUploadResponse> {
+    const params = new URLSearchParams({ filename: file.name });
+    return apiUpload<DebugUploadResponse>(`/api/debug/logs/upload?${params.toString()}`, file);
   },
   debugData(payload: {
     name: string;

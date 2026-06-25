@@ -155,7 +155,7 @@ function AppInner() {
     if (v) { setPlanOnly(true); return; }
     openConfirm({
       title: "切换到执行模式",
-      message: "执行模式下 MoveJ、MoveL 和 Named State 会下发真实运动。",
+      message: "执行模式下 MoveJ、MoveL 和预设位姿会下发真实运动。",
       confirmLabel: "切换到执行",
       tone: "danger",
       onConfirm: () => setPlanOnly(false),
@@ -247,6 +247,8 @@ function AppInner() {
           tone={planOnly ? "good" : "bad"}
         />
       </section>
+
+      <div className="summary-divider" aria-hidden="true" />
 
       <section className="workspace-grid">
         <div className="workspace-primary">

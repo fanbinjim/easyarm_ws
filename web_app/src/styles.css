@@ -255,6 +255,12 @@ input, select {
 .summary-card.warn .summary-icon { background: #f4e8c3; color: #624400; }
 .summary-card.bad .summary-icon { background: #f3d2d2; color: #7d1d25; }
 
+.summary-divider {
+  height: 1px;
+  margin: 4px 0 12px;
+  background: #cfd9d4;
+}
+
 /* Workspace */
 .workspace-grid {
   display: grid;
@@ -475,7 +481,7 @@ input, select {
   font-variant-numeric: tabular-nums;
 }
 
-/* Named State */
+/* 预设位姿 */
 .named-values {
   min-height: 60px;
   margin: 10px 0;
@@ -1038,6 +1044,10 @@ input, select {
 .download-link.disabled {
   opacity: 0.5;
   pointer-events: none;
+}
+
+.hidden-file-input {
+  display: none;
 }
 
 .debug-form-grid {

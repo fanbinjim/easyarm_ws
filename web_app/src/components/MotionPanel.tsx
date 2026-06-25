@@ -29,7 +29,7 @@ type Props = {
 const TABS = [
   { key: "movej", label: "MoveJ", icon: <Send /> },
   { key: "movel", label: "MoveL", icon: <Send /> },
-  { key: "named", label: "Named State", icon: <ListChecks /> },
+  { key: "named", label: "预设位姿", icon: <ListChecks /> },
 ] as const;
 
 type MotionTab = (typeof TABS)[number]["key"];
@@ -117,7 +117,7 @@ export function MotionPanel({
             : "未选择"}
         </div>
         <button disabled={busy || !selectedNamed} onClick={() => onMoveNamedState(selectedNamed)}>
-          <Play /> {actionLabel} Named State
+          <Play /> {actionLabel} 预设位姿
         </button>
       </div>
     ),

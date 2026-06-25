@@ -27,10 +27,10 @@ def generate_launch_description():
     debug_enable = LaunchConfiguration("debug_enable", default="false")
     rviz = LaunchConfiguration("rviz", default="false")
     moveit_servo = LaunchConfiguration("moveit_servo", default="true")
-    web = LaunchConfiguration("web", default="false")
-    web_backend_host = LaunchConfiguration("web_backend_host", default="127.0.0.1")
+    web = LaunchConfiguration("web", default="true")
+    web_backend_host = LaunchConfiguration("web_backend_host", default="0.0.0.0")
     web_backend_port = LaunchConfiguration("web_backend_port", default="8000")
-    web_token = LaunchConfiguration("web_token", default="")
+    web_token = LaunchConfiguration("web_token", default="easyarm")
     publish_frequency = LaunchConfiguration("publish_frequency", default="15.0")
     easyarm_urdf_path = LaunchConfiguration("easyarm_urdf_path")
 
@@ -264,12 +264,12 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "web",
-                default_value="false",
+                default_value="true",
                 description="Start the EasyArm web bridge backend.",
             ),
             DeclareLaunchArgument(
                 "web_backend_host",
-                default_value="127.0.0.1",
+                default_value="0.0.0.0",
                 description="Host address for the EasyArm web bridge backend.",
             ),
             DeclareLaunchArgument(
@@ -279,7 +279,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "web_token",
-                default_value=EnvironmentVariable("EASYARM_WEB_TOKEN", default_value=""),
+                default_value=EnvironmentVariable("EASYARM_WEB_TOKEN", default_value="easyarm"),
                 description="Required token for browser access when web:=true.",
             ),
             DeclareLaunchArgument(
