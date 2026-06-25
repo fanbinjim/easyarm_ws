@@ -507,17 +507,6 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
 
     const init = async () => {
       try {
-        const model = await api.robotModel;
-        if (disposed) return;
-
-        if (!model.joint_names || model.joint_names.length === 0) {
-          setViewState("empty");
-          return;
-        }
-
-        const assetBase = model.asset_base_url;
-        const urdfXml = await apiText(model.urdf_url);
-
         const container = containerRef.current;
         const viewCubeContainer = viewCubeRef.current;
         if (!container || !viewCubeContainer || disposed) return;
@@ -581,6 +570,27 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
         });
         resizeObserver.observe(container);
         localScene.resizeObserver = resizeObserver;
+        setViewState("ready");
+
+        let model;
+        let urdfXml = "";
+        try {
+          model = await api.robotModel;
+          if (disposed) return;
+
+          if (!model.joint_names || model.joint_names.length === 0) {
+            console.warn("Robot model metadata has no joint_names; rendering scene without robot.");
+            return;
+          }
+
+          urdfXml = await apiText(model.urdf_url);
+        } catch (err) {
+          console.warn("Robot model unavailable; rendering scene without robot.", err);
+          return;
+        }
+
+        const assetBase = model.asset_base_url;
+        try {
 
         const URDFLoaderCtor = await loadURDFLoader();
         const loader = new URDFLoaderCtor();
@@ -621,7 +631,10 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
         localScene.joints = jointMap;
         localScene.ghostJoints = ghostJointMap;
         localScene.jointNames = model.joint_names;
-        setViewState("ready");
+        } catch (err) {
+          console.warn("Robot URDF unavailable; rendering scene without robot.", err);
+          return;
+        }
       } catch (err) {
         if (disposed) return;
         const msg = err instanceof Error ? err.message : String(err);

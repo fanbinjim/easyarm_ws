@@ -23,6 +23,7 @@ import { JointTable } from "./components/JointTable";
 import { PosePanel } from "./components/PosePanel";
 import { ActionLog } from "./components/ActionLog";
 import { ControllerList } from "./components/ControllerList";
+import { DebugDataPanel } from "./components/DebugDataPanel";
 import { RosLog } from "./components/RosLog";
 import { SummaryCard } from "./ui/SummaryCard";
 import type { JointTarget } from "./api/types";
@@ -266,6 +267,7 @@ function AppInner() {
             busy={busyRef.current}
           />
           <StreamPanel />
+          <DebugDataPanel token={settings.token} />
         </div>
 
         <aside className="workspace-side">

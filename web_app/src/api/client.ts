@@ -2,6 +2,10 @@ import type {
   ActionResponse,
   CancelActionResponse,
   ControllerResponse,
+  DebugDataResponse,
+  DebugField,
+  DebugLogsResponse,
+  DebugStatusResponse,
   HealthResponse,
   JointResponse,
   NamedStateResponse,
@@ -199,6 +203,35 @@ const _api = {
   },
   get robotModel(): Promise<RobotModelResponse> {
     return apiGet<RobotModelResponse>("/api/robot/model");
+  },
+  get debugStatus(): Promise<DebugStatusResponse> {
+    return apiGet<DebugStatusResponse>("/api/debug/status");
+  },
+  get debugLogs(): Promise<DebugLogsResponse> {
+    return apiGet<DebugLogsResponse>("/api/debug/logs");
+  },
+  debugStart(): Promise<DebugStatusResponse> {
+    return apiPost<DebugStatusResponse>("/api/debug/start");
+  },
+  debugStop(): Promise<DebugStatusResponse> {
+    return apiPost<DebugStatusResponse>("/api/debug/stop");
+  },
+  debugData(payload: {
+    name: string;
+    joint: number;
+    field: DebugField;
+    start: number;
+    end: number;
+    stride: number;
+  }): Promise<DebugDataResponse> {
+    const params = new URLSearchParams({
+      joint: String(payload.joint),
+      field: payload.field,
+      start: String(payload.start),
+      end: String(payload.end),
+      stride: String(payload.stride),
+    });
+    return apiGet<DebugDataResponse>(`/api/debug/logs/${encodeURIComponent(payload.name)}/data?${params.toString()}`);
   },
   movej(payload: {
     joints: number[];

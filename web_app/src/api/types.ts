@@ -73,6 +73,48 @@ export type StopResponse = BasicResponse;
 
 export type SafeShutdownResponse = BasicResponse;
 
+export type DebugStatusResponse = BasicResponse & {
+  active: boolean;
+  path: string;
+  written_count: number;
+  dropped_count: number;
+};
+
+export type DebugLogEntry = {
+  name: string;
+  path: string;
+  size: number;
+  mtime: number;
+};
+
+export type DebugLogsResponse = BasicResponse & {
+  logs: DebugLogEntry[];
+};
+
+export type DebugField =
+  | "position_error"
+  | "smoothed_position_error"
+  | "velocity_error"
+  | "motor_velocity_error"
+  | "command_position"
+  | "state_position"
+  | "command_velocity"
+  | "state_velocity"
+  | "motor_torque"
+  | "write_duration_us";
+
+export type DebugDataPoint = {
+  time_s: number;
+  value: number;
+};
+
+export type DebugDataResponse = BasicResponse & {
+  name: string;
+  joint: number;
+  field: DebugField;
+  points: DebugDataPoint[];
+};
+
 export type RobotModelResponse = BasicResponse & {
   urdf_url: string;
   asset_base_url: string;

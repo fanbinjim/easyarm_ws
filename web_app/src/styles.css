@@ -903,12 +903,205 @@ input, select {
   border-color: #8f1d27;
 }
 
+/* Debug / Data Analysis */
+.debug-panel {
+  border-color: #c9d8d2;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.debug-section {
+  min-width: 0;
+  border: 1px solid #e1e9e5;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfb;
+}
+
+.debug-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.debug-section-title {
+  font-weight: 900;
+  color: #1e332c;
+  margin-bottom: 8px;
+}
+
+.debug-section-head .debug-section-title {
+  margin-bottom: 0;
+}
+
+.debug-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 10px;
+}
+
+.debug-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.debug-warning,
+.debug-error {
+  border-radius: 6px;
+  padding: 9px 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.debug-warning {
+  color: #624400;
+  background: #fff4d4;
+  border: 1px solid #efd48d;
+}
+
+.debug-error {
+  color: #9b1c24;
+  background: #fde8e8;
+  border: 1px solid #e8b4b4;
+}
+
+.debug-log-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.debug-log-row {
+  min-height: 46px;
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
+  border-color: #dce7e2;
+  background: #fff;
+  color: #1e332c;
+}
+
+.debug-log-row.active {
+  background: #e5f3ec;
+  border-color: #94c5ad;
+}
+
+.debug-log-row span,
+.debug-log-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-log-row span {
+  min-width: 0;
+  font-weight: 800;
+}
+
+.debug-log-row small {
+  flex-shrink: 0;
+  color: #61736c;
+}
+
+.download-link {
+  min-height: 38px;
+  border: 1px solid #c7d2cd;
+  background: #fff;
+  color: #263a34;
+  border-radius: 6px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+  font-weight: 800;
+}
+
+.download-link svg {
+  width: 16px;
+  height: 16px;
+}
+
+.download-link.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.debug-form-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) 110px minmax(190px, 1fr) 100px 100px 92px auto;
+  gap: 9px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.debug-form-grid label {
+  display: grid;
+  gap: 4px;
+}
+
+.debug-form-grid label span {
+  color: #61736c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.debug-chart {
+  min-height: 260px;
+  border: 1px solid #e1e9e5;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.debug-chart svg {
+  display: block;
+  width: 100%;
+  height: 260px;
+}
+
+.debug-chart rect {
+  fill: #fff;
+}
+
+.debug-chart line {
+  stroke: #cbd8d2;
+  stroke-width: 1;
+}
+
+.debug-chart path {
+  fill: none;
+  stroke: #1f3d35;
+  stroke-width: 2;
+}
+
+.debug-chart text {
+  fill: #60736c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 /* Responsive */
 @media (max-width: 1280px) {
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workspace-grid { grid-template-columns: 1fr; }
   .workspace-side { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stream-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .debug-grid { grid-template-columns: 1fr; }
+  .debug-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 860px) {
@@ -919,6 +1112,8 @@ input, select {
   .number-grid { grid-template-columns: 1fr; }
   .joint-slider-row { grid-template-columns: 56px minmax(0, 1fr); }
   .joint-slider-row input[type="number"] { grid-column: 2; width: 100%; }
+  .debug-form-grid { grid-template-columns: 1fr; }
+  .debug-status-grid { grid-template-columns: 1fr; }
   .log-list div { grid-template-columns: 1fr; }
   .control-head { flex-direction: column; align-items: stretch; }
 }
