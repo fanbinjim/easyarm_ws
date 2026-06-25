@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Download, RefreshCw, Square, Play } from "lucide-react";
-import { api, apiAssetUrl, ApiError, errorMessage, numberText } from "../api/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LineChart } from "echarts/charts";
+import { DataZoomComponent, GridComponent, LegendComponent, TitleComponent, TooltipComponent } from "echarts/components";
+import { init, use, type ECharts } from "echarts/core";
+import { CanvasRenderer } from "echarts/renderers";
+import { BarChart3, Download, Maximize2, Play, RefreshCw, Square, X } from "lucide-react";
+import { api, apiAssetUrl, ApiError, errorMessage } from "../api/client";
 import type { DebugDataPoint, DebugField, DebugLogEntry, DebugStatusResponse } from "../api/types";
 import { Panel } from "../ui/Panel";
 import { Metric } from "../ui/Metric";
@@ -18,26 +22,74 @@ const DEBUG_FIELDS: DebugField[] = [
   "write_duration_us",
 ];
 
+const FIELD_COLORS: Record<DebugField, string> = {
+  position_error: "#dc2626",
+  smoothed_position_error: "#f97316",
+  velocity_error: "#ca8a04",
+  motor_velocity_error: "#65a30d",
+  command_position: "#059669",
+  state_position: "#0d9488",
+  command_velocity: "#0284c7",
+  state_velocity: "#2563eb",
+  motor_torque: "#7c3aed",
+  write_duration_us: "#be185d",
+};
+
 const JOINTS = ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"];
+
+use([LineChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, TitleComponent, CanvasRenderer]);
 
 type DebugDataPanelProps = {
   token: string;
+};
+
+type FieldSeries = {
+  field: DebugField;
+  points: DebugDataPoint[];
+};
+
+type JointSeries = {
+  joint: number;
+  series: FieldSeries[];
+};
+
+type AnalysisViewProps = {
+  token: string;
+  debugApiUnavailable: boolean;
+  selectedLogEntry: DebugLogEntry | null;
+  selectedJoints: number[];
+  selectedFields: DebugField[];
+  start: number;
+  end: number;
+  stride: number;
+  dataLoading: boolean;
+  chartData: JointSeries[];
+  setSelectedJoints: (value: number[]) => void;
+  setSelectedFields: (value: DebugField[]) => void;
+  setStart: (value: number) => void;
+  setEnd: (value: number) => void;
+  setStride: (value: number) => void;
+  loadData: () => void;
+  fullscreen?: boolean;
+  onOpenFullscreen?: () => void;
+  onCloseFullscreen?: () => void;
 };
 
 export function DebugDataPanel({ token }: DebugDataPanelProps) {
   const [status, setStatus] = useState<DebugStatusResponse | null>(null);
   const [logs, setLogs] = useState<DebugLogEntry[]>([]);
   const [selectedLog, setSelectedLog] = useState("");
-  const [joint, setJoint] = useState(0);
-  const [field, setField] = useState<DebugField>("position_error");
+  const [selectedJoints, setSelectedJoints] = useState<number[]>([0]);
+  const [selectedFields, setSelectedFields] = useState<DebugField[]>(["position_error"]);
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(10);
   const [stride, setStride] = useState(5);
-  const [points, setPoints] = useState<DebugDataPoint[]>([]);
+  const [chartData, setChartData] = useState<JointSeries[]>([]);
   const [statusLoading, setStatusLoading] = useState(false);
   const [recordLoading, setRecordLoading] = useState<"start" | "stop" | "">("");
   const [logsLoading, setLogsLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [error, setError] = useState("");
   const [debugApiUnavailable, setDebugApiUnavailable] = useState(false);
 
@@ -82,7 +134,7 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
         setSelectedLog((current) => current && response.logs.some((log) => log.name === current) ? current : response.logs[0].name);
       } else {
         setSelectedLog("");
-        setPoints([]);
+        setChartData([]);
       }
     } catch (err) {
       handleRequestError(err);
@@ -134,15 +186,43 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
   };
 
   const loadData = async () => {
-    if (!token || debugApiUnavailable || !selectedLog) return;
+    if (!token || debugApiUnavailable || !selectedLog || selectedJoints.length === 0 || selectedFields.length === 0) return;
     setDataLoading(true);
     setError("");
     try {
-      const response = await api.debugData({ name: selectedLog, joint, field, start, end, stride });
-      setPoints(response.points);
-    } catch (err) {
-      setPoints([]);
-      handleRequestError(err);
+      const requests = selectedJoints.flatMap((joint) => selectedFields.map((field) => ({ joint, field })));
+      const results = await Promise.allSettled(
+        requests.map((item) => api.debugData({ name: selectedLog, joint: item.joint, field: item.field, start, end, stride })),
+      );
+
+      const fulfilled: JointSeries[] = [];
+      const failures: unknown[] = [];
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const request = requests[i];
+        if (result.status === "fulfilled") {
+          const existing = fulfilled.find((item) => item.joint === request.joint);
+          const series = { field: request.field, points: result.value.points };
+          if (existing) {
+            existing.series.push(series);
+          } else {
+            fulfilled.push({ joint: request.joint, series: [series] });
+          }
+        } else {
+          failures.push(result.reason);
+        }
+      }
+
+      if (fulfilled.length === 0) {
+        setChartData([]);
+        handleRequestError(failures[0] ?? new Error("no debug data returned"));
+        return;
+      }
+
+      setChartData(fulfilled.sort((a, b) => a.joint - b.joint));
+      if (failures.length > 0) {
+        setError(`部分曲线加载失败：${failures.length}/${results.length}`);
+      }
     } finally {
       setDataLoading(false);
     }
@@ -199,7 +279,7 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
                   className={`debug-log-row ${selectedLog === log.name ? "active" : ""}`}
                   onClick={() => {
                     setSelectedLog(log.name);
-                    setPoints([]);
+                    setChartData([]);
                   }}
                 >
                   <span>{log.name}</span>
@@ -216,80 +296,263 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
         </section>
       </div>
 
-      <section className="debug-section debug-analysis">
-        <div className="debug-section-title">Analysis</div>
-        <div className="debug-form-grid">
-          <label>
-            <span>log</span>
-            <input value={selectedLogEntry?.name ?? ""} readOnly placeholder="选择日志" />
-          </label>
-          <label>
-            <span>joint</span>
-            <select value={joint} onChange={(e) => setJoint(Number(e.target.value))}>
-              {JOINTS.map((name, index) => <option key={name} value={index}>{name}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>field</span>
-            <select value={field} onChange={(e) => setField(e.target.value as DebugField)}>
-              {DEBUG_FIELDS.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>start (s)</span>
-            <input type="number" step="0.1" value={start} onChange={(e) => setStart(Number(e.target.value))} />
-          </label>
-          <label>
-            <span>end (s)</span>
-            <input type="number" step="0.1" value={end} onChange={(e) => setEnd(Number(e.target.value))} />
-          </label>
-          <label>
-            <span>stride</span>
-            <input type="number" min="1" step="1" value={stride} onChange={(e) => setStride(Math.max(1, Number(e.target.value)))} />
-          </label>
-          <button disabled={!token || debugApiUnavailable || !selectedLog || dataLoading} onClick={() => void loadData()}>
-            <BarChart3 /> {dataLoading ? "Loading..." : "Load Data"}
-          </button>
-        </div>
+      <AnalysisView
+        token={token}
+        debugApiUnavailable={debugApiUnavailable}
+        selectedLogEntry={selectedLogEntry}
+        selectedJoints={selectedJoints}
+        selectedFields={selectedFields}
+        start={start}
+        end={end}
+        stride={stride}
+        dataLoading={dataLoading}
+        chartData={chartData}
+        setSelectedJoints={setSelectedJoints}
+        setSelectedFields={setSelectedFields}
+        setStart={setStart}
+        setEnd={setEnd}
+        setStride={setStride}
+        loadData={loadData}
+        onOpenFullscreen={() => setFullscreen(true)}
+      />
 
-        <DebugChart points={points} field={field} />
-      </section>
+      {fullscreen && (
+        <div className="debug-fullscreen-backdrop">
+          <div className="debug-fullscreen-panel">
+            <AnalysisView
+              token={token}
+              debugApiUnavailable={debugApiUnavailable}
+              selectedLogEntry={selectedLogEntry}
+              selectedJoints={selectedJoints}
+              selectedFields={selectedFields}
+              start={start}
+              end={end}
+              stride={stride}
+              dataLoading={dataLoading}
+              chartData={chartData}
+              setSelectedJoints={setSelectedJoints}
+              setSelectedFields={setSelectedFields}
+              setStart={setStart}
+              setEnd={setEnd}
+              setStride={setStride}
+              loadData={loadData}
+              fullscreen
+              onCloseFullscreen={() => setFullscreen(false)}
+            />
+          </div>
+        </div>
+      )}
     </Panel>
   );
 }
 
-function DebugChart({ points, field }: { points: DebugDataPoint[]; field: DebugField }) {
-  if (points.length === 0) {
+function AnalysisView({
+  token,
+  debugApiUnavailable,
+  selectedLogEntry,
+  selectedJoints,
+  selectedFields,
+  start,
+  end,
+  stride,
+  dataLoading,
+  chartData,
+  setSelectedJoints,
+  setSelectedFields,
+  setStart,
+  setEnd,
+  setStride,
+  loadData,
+  fullscreen = false,
+  onOpenFullscreen,
+  onCloseFullscreen,
+}: AnalysisViewProps) {
+  return (
+    <section className={`debug-section debug-analysis ${fullscreen ? "fullscreen" : ""}`}>
+      <div className="debug-section-head">
+        <div className="debug-section-title">Analysis</div>
+        {fullscreen ? (
+          <button className="ghost-button" onClick={onCloseFullscreen}><X /> Close</button>
+        ) : (
+          <button className="ghost-button" onClick={onOpenFullscreen}><Maximize2 /> Fullscreen</button>
+        )}
+      </div>
+      <div className="debug-form-grid multi">
+        <label>
+          <span>log</span>
+          <input value={selectedLogEntry?.name ?? ""} readOnly placeholder="选择日志" />
+        </label>
+        <label>
+          <span>start (s)</span>
+          <input type="number" step="0.1" value={start} onChange={(e) => setStart(Number(e.target.value))} />
+        </label>
+        <label>
+          <span>end (s)</span>
+          <input type="number" step="0.1" value={end} onChange={(e) => setEnd(Number(e.target.value))} />
+        </label>
+        <label>
+          <span>stride</span>
+          <input type="number" min="1" step="1" value={stride} onChange={(e) => setStride(Math.max(1, Number(e.target.value)))} />
+        </label>
+        <button disabled={!token || debugApiUnavailable || !selectedLogEntry || dataLoading || selectedJoints.length === 0 || selectedFields.length === 0} onClick={() => void loadData()}>
+          <BarChart3 /> {dataLoading ? "Loading..." : "Load Data"}
+        </button>
+      </div>
+
+      <div className="debug-selector-grid">
+        <MultiToggleGroup
+          label="joints"
+          options={JOINTS.map((name, index) => ({ value: index, label: name }))}
+          selected={selectedJoints}
+          onChange={setSelectedJoints}
+        />
+        <MultiToggleGroup
+          label="fields"
+          options={DEBUG_FIELDS.map((field) => ({ value: field, label: field }))}
+          selected={selectedFields}
+          onChange={setSelectedFields}
+        />
+      </div>
+
+      <DebugCharts chartData={chartData} selectedFields={selectedFields} fullscreen={fullscreen} />
+    </section>
+  );
+}
+
+function MultiToggleGroup<T extends string | number>({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: Array<{ value: T; label: string }>;
+  selected: T[];
+  onChange: (value: T[]) => void;
+}) {
+  const toggle = (value: T) => {
+    if (selected.includes(value)) {
+      onChange(selected.filter((item) => item !== value));
+    } else {
+      onChange([...selected, value]);
+    }
+  };
+
+  return (
+    <div className="debug-toggle-group">
+      <span>{label}</span>
+      <div>
+        {options.map((option) => (
+          <button
+            key={String(option.value)}
+            type="button"
+            className={selected.includes(option.value) ? "active" : ""}
+            onClick={() => toggle(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DebugCharts({ chartData, selectedFields, fullscreen }: { chartData: JointSeries[]; selectedFields: DebugField[]; fullscreen: boolean }) {
+  if (chartData.length === 0) {
     return <div className="debug-chart empty-hint">加载数据后显示曲线</div>;
   }
 
-  const width = 900;
-  const height = 260;
-  const pad = { left: 54, right: 18, top: 18, bottom: 34 };
-  const xs = points.map((p) => p.time_s);
-  const ys = points.map((p) => p.value);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const xSpan = maxX - minX || 1;
-  const ySpan = maxY - minY || 1;
-  const innerW = width - pad.left - pad.right;
-  const innerH = height - pad.top - pad.bottom;
-  const x = (value: number) => pad.left + ((value - minX) / xSpan) * innerW;
-  const y = (value: number) => pad.top + innerH - ((value - minY) / ySpan) * innerH;
-  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.time_s).toFixed(2)},${y(p.value).toFixed(2)}`).join(" ");
+  return (
+    <div className={`debug-chart-stack ${fullscreen ? "fullscreen" : ""}`}>
+      {chartData.map((item) => (
+        <JointChart key={item.joint} joint={item.joint} series={item.series} fullscreen={fullscreen} />
+      ))}
+    </div>
+  );
+}
+
+function JointChart({ joint, series, fullscreen }: { joint: number; series: FieldSeries[]; fullscreen: boolean }) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const instanceRef = useRef<ECharts | null>(null);
+  const allPoints = series.flatMap((item) => item.points);
+
+  useEffect(() => {
+    const element = chartRef.current;
+    if (!element) return;
+    const chart = init(element, undefined, { renderer: "canvas" });
+    instanceRef.current = chart;
+    const resizeObserver = new ResizeObserver(() => chart.resize());
+    resizeObserver.observe(element);
+    return () => {
+      resizeObserver.disconnect();
+      chart.dispose();
+      instanceRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const chart = instanceRef.current;
+    if (!chart) return;
+    chart.setOption({
+      animation: false,
+      color: series.map((item) => FIELD_COLORS[item.field]),
+      title: {
+        text: JOINTS[joint],
+        left: 12,
+        top: 6,
+        textStyle: { fontSize: 13, fontWeight: 800, color: "#1e332c" },
+      },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        valueFormatter: (value: unknown) => typeof value === "number" ? value.toFixed(6) : String(value),
+      },
+      legend: {
+        top: 6,
+        right: 12,
+        type: "scroll",
+        textStyle: { color: "#425850", fontSize: 11, fontWeight: 700 },
+      },
+      grid: { left: 58, right: 22, top: 50, bottom: 48 },
+      dataZoom: [
+        { type: "inside", xAxisIndex: 0, filterMode: "none" },
+        { type: "slider", xAxisIndex: 0, height: 20, bottom: 12, filterMode: "none" },
+      ],
+      xAxis: {
+        type: "value",
+        name: "time_s",
+        nameLocation: "middle",
+        nameGap: 28,
+        axisLine: { lineStyle: { color: "#cbd8d2" } },
+        axisLabel: { color: "#60736c" },
+        splitLine: { lineStyle: { color: "#edf1ef" } },
+      },
+      yAxis: {
+        type: "value",
+        name: "value",
+        axisLine: { lineStyle: { color: "#cbd8d2" } },
+        axisLabel: { color: "#60736c" },
+        splitLine: { lineStyle: { color: "#edf1ef" } },
+      },
+      series: series.map((item) => ({
+        name: item.field,
+        type: "line",
+        showSymbol: false,
+        lineStyle: { width: 2, color: FIELD_COLORS[item.field] },
+        emphasis: { focus: "series" },
+        data: item.points.map((point) => [point.time_s, point.value]),
+      })),
+    }, true);
+    window.setTimeout(() => chart.resize(), 0);
+  }, [fullscreen, joint, series]);
+
+  if (allPoints.length === 0) {
+    return <div className="debug-chart empty-hint">{JOINTS[joint]} 没有数据</div>;
+  }
 
   return (
     <div className="debug-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${field} chart`}>
-        <rect x="0" y="0" width={width} height={height} rx="8" />
-        <line x1={pad.left} y1={height - pad.bottom} x2={width - pad.right} y2={height - pad.bottom} />
-        <line x1={pad.left} y1={pad.top} x2={pad.left} y2={height - pad.bottom} />
-        <path d={path} />
-        <text x={pad.left} y={height - 10}>time_s {numberText(minX, 2)} - {numberText(maxX, 2)}</text>
-        <text x={pad.left} y="14">{field}: {numberText(minY, 4)} - {numberText(maxY, 4)}</text>
-      </svg>
+      <div className={`debug-echart ${fullscreen ? "fullscreen" : ""}`} ref={chartRef} />
     </div>
   );
 }
