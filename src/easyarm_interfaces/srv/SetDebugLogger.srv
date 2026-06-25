@@ -1,0 +1,8 @@
+bool enabled
+---
+bool success
+string message
+bool active
+string path
+uint64 written_count
+uint64 dropped_count

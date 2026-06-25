@@ -1,0 +1,7 @@
+---
+bool success
+string message
+string[] names
+string[] paths
+uint64[] sizes
+float64[] mtimes

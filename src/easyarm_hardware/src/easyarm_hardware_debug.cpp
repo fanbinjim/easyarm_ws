@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <limits>
+#include <string>
 #include <sstream>
 
 namespace easyarm_hardware
@@ -60,40 +61,32 @@ std::string timestamped_debug_log_path()
 
   std::ostringstream name;
   name << "easyarm_log_" << std::put_time(&local_time, "%Y%m%d_%H%M%S") << ".bin";
-  return (std::filesystem::path(kDefaultDebugLogDirectory) / name.str()).string();
+  auto path = std::filesystem::path(kDefaultDebugLogDirectory) / name.str();
+  for (int index = 1; std::filesystem::exists(path) && index < 1000; ++index) {
+    std::ostringstream fallback_name;
+    fallback_name << "easyarm_log_" << std::put_time(&local_time, "%Y%m%d_%H%M%S")
+                  << "_" << std::setw(3) << std::setfill('0') << index << ".bin";
+    path = std::filesystem::path(kDefaultDebugLogDirectory) / fallback_name.str();
+  }
+  return path.string();
 }
 
 }  // namespace
 
 void EasyArmHardware::start_debug_logger()
 {
-  if (!debug_logger_config_.enabled) {
+  std::lock_guard<std::mutex> lock(debug_state_mutex_);
+  if (!debug_logger_config_.enabled || debug_logger_.is_active()) {
     return;
   }
 
-  debug_logger_config_.path = timestamped_debug_log_path();
-  try {
-    std::filesystem::create_directories(std::filesystem::path(debug_logger_config_.path).parent_path());
-  } catch (const std::filesystem::filesystem_error & error) {
-    RCLCPP_ERROR(logger_, "Failed to create debug log directory: %s", error.what());
-    return;
-  }
-  if (!debug_logger_.start(debug_logger_config_)) {
-    RCLCPP_ERROR(logger_, "Failed to start debug logger at %s", debug_logger_config_.path.c_str());
-    return;
-  }
-
-  debug_sequence_ = 0;
-  RCLCPP_INFO(
-    logger_,
-    "Debug logger started: path=%s, buffer_seconds=%.1f, sample_rate=%.1f Hz",
-    debug_logger_config_.path.c_str(),
-    debug_logger_config_.buffer_seconds,
-    debug_logger_config_.sample_rate_hz);
+  std::string message;
+  apply_debug_logger_enabled(true, message);
 }
 
 void EasyArmHardware::stop_debug_logger()
 {
+  std::lock_guard<std::mutex> lock(debug_state_mutex_);
   const bool was_active = debug_logger_.is_active();
   debug_logger_.stop();
   if (was_active) {
@@ -180,6 +173,128 @@ void EasyArmHardware::push_debug_sample(
   }
   sample.write_duration_us = elapsed_us(write_start);
   debug_logger_.push(sample);
+}
+
+bool EasyArmHardware::apply_debug_logger_enabled(bool enabled, std::string & message)
+{
+  if (enabled == debug_logger_.is_active()) {
+    debug_logger_config_.enabled = enabled;
+    message = enabled ? "Debug logger is already active" : "Debug logger is already stopped";
+    return true;
+  }
+
+  if (enabled) {
+    debug_logger_config_.enabled = true;
+    debug_logger_config_.path = timestamped_debug_log_path();
+    try {
+      std::filesystem::create_directories(std::filesystem::path(debug_logger_config_.path).parent_path());
+    } catch (const std::filesystem::filesystem_error & error) {
+      message = std::string("Failed to create debug log directory: ") + error.what();
+      RCLCPP_ERROR(logger_, "%s", message.c_str());
+      debug_logger_config_.enabled = false;
+      return false;
+    }
+
+    if (!debug_logger_.start(debug_logger_config_)) {
+      message = "Failed to start debug logger at " + debug_logger_config_.path;
+      RCLCPP_ERROR(logger_, "%s", message.c_str());
+      debug_logger_config_.enabled = false;
+      return false;
+    }
+
+    debug_sequence_ = 0;
+    message = "Debug logger started";
+    RCLCPP_INFO(
+      logger_,
+      "Debug logger started: path=%s, buffer_seconds=%.1f, sample_rate=%.1f Hz",
+      debug_logger_config_.path.c_str(),
+      debug_logger_config_.buffer_seconds,
+      debug_logger_config_.sample_rate_hz);
+    return true;
+  }
+
+  debug_logger_config_.enabled = false;
+  const bool was_active = debug_logger_.is_active();
+  debug_logger_.stop();
+  message = was_active ? "Debug logger stopped" : "Debug logger is already stopped";
+  if (was_active) {
+    RCLCPP_INFO(
+      logger_,
+      "Debug logger stopped: written=%lu, dropped=%lu, path=%s",
+      static_cast<unsigned long>(debug_logger_.written_count()),
+      static_cast<unsigned long>(debug_logger_.dropped_count()),
+      debug_logger_config_.path.c_str());
+  }
+  return true;
+}
+
+DebugLoggerStatus EasyArmHardware::debug_logger_status() const
+{
+  std::lock_guard<std::mutex> lock(debug_state_mutex_);
+  DebugLoggerStatus status;
+  status.active = debug_logger_.is_active();
+  status.path = debug_logger_config_.path;
+  status.written_count = debug_logger_.written_count();
+  status.dropped_count = debug_logger_.dropped_count();
+  return status;
+}
+
+void EasyArmHardware::fill_debug_logger_status(
+  easyarm_interfaces::srv::SetDebugLogger::Response & response,
+  bool success,
+  const std::string & message) const
+{
+  const auto status = debug_logger_status();
+  response.success = success;
+  response.message = message;
+  response.active = status.active;
+  response.path = status.path;
+  response.written_count = status.written_count;
+  response.dropped_count = status.dropped_count;
+}
+
+void EasyArmHardware::fill_debug_logger_status(
+  easyarm_interfaces::srv::GetDebugLoggerStatus::Response & response,
+  bool success,
+  const std::string & message) const
+{
+  const auto status = debug_logger_status();
+  response.success = success;
+  response.message = message;
+  response.active = status.active;
+  response.path = status.path;
+  response.written_count = status.written_count;
+  response.dropped_count = status.dropped_count;
+}
+
+void EasyArmHardware::apply_requested_debug_logger()
+{
+  uint64_t generation = 0;
+  bool enabled = false;
+  {
+    std::lock_guard<std::mutex> lock(debug_request_mutex_);
+    if (!debug_request_pending_) {
+      return;
+    }
+    generation = debug_request_generation_;
+    enabled = debug_request_enabled_;
+    debug_request_pending_ = false;
+  }
+
+  std::string message;
+  bool success = false;
+  {
+    std::lock_guard<std::mutex> lock(debug_state_mutex_);
+    success = apply_debug_logger_enabled(enabled, message);
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(debug_request_mutex_);
+    debug_request_success_ = success;
+    debug_request_message_ = message;
+    debug_applied_generation_ = generation;
+  }
+  debug_request_cv_.notify_all();
 }
 
 }  // namespace easyarm_hardware

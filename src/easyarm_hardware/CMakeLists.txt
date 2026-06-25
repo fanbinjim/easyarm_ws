@@ -9,12 +9,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(easyarm_dynamics REQUIRED)
+find_package(easyarm_interfaces REQUIRED)
 find_package(robstride_can REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
@@ -36,10 +38,13 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp_lifecycle
   std_msgs
   easyarm_dynamics
+  easyarm_interfaces
   robstride_can
 )
 
 pluginlib_export_plugin_description_file(hardware_interface easyarm_hardware.xml)
+
+ament_python_install_package(${PROJECT_NAME})
 
 install(
   TARGETS ${PROJECT_NAME}
@@ -73,6 +78,7 @@ ament_export_dependencies(
   rclcpp_lifecycle
   std_msgs
   easyarm_dynamics
+  easyarm_interfaces
   robstride_can
 )
 ament_export_include_directories(include)

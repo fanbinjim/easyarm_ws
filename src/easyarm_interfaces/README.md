@@ -57,6 +57,9 @@ easyarm_interfaces/action/MoveNamedState
 /easyarm/get_joints easyarm_interfaces/srv/GetJoints
 /easyarm/get_pose   easyarm_interfaces/srv/GetPose
 /easyarm/list_named_state easyarm_interfaces/srv/ListNamedState
+/easyarm/debug_logger/set_enabled easyarm_interfaces/srv/SetDebugLogger
+/easyarm/debug_logger/status easyarm_interfaces/srv/GetDebugLoggerStatus
+/easyarm/debug_logger/list_logs easyarm_interfaces/srv/ListDebugLogs
 ```
 
 `SetMode` 支持：
@@ -79,4 +82,7 @@ ros2 interface show easyarm_interfaces/srv/SetMode
 ros2 interface show easyarm_interfaces/srv/GetJoints
 ros2 interface show easyarm_interfaces/srv/GetPose
 ros2 interface show easyarm_interfaces/srv/ListNamedState
+ros2 interface show easyarm_interfaces/srv/SetDebugLogger
+ros2 interface show easyarm_interfaces/srv/GetDebugLoggerStatus
+ros2 interface show easyarm_interfaces/srv/ListDebugLogs
 ```

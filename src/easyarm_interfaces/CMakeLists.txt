@@ -24,6 +24,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetJoints.srv"
   "srv/GetPose.srv"
   "srv/ListNamedState.srv"
+  "srv/SetDebugLogger.srv"
+  "srv/GetDebugLoggerStatus.srv"
+  "srv/ListDebugLogs.srv"
   DEPENDENCIES
     geometry_msgs
     sensor_msgs

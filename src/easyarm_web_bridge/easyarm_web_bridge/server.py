@@ -17,7 +17,19 @@ from ament_index_python.packages import PackageNotFoundError, get_package_share_
 from control_msgs.msg import JointJog
 from controller_manager_msgs.srv import ListControllers
 from easyarm_interfaces.action import MoveJ, MoveL, MoveNamedState
-from easyarm_interfaces.srv import CancelActiveAction, GetJoints, GetPose, GetState, ListNamedState, SetMode, Stop
+from easyarm_hardware.debug_log_reader import iter_samples
+from easyarm_interfaces.srv import (
+    CancelActiveAction,
+    GetDebugLoggerStatus,
+    GetJoints,
+    GetPose,
+    GetState,
+    ListDebugLogs,
+    ListNamedState,
+    SetDebugLogger,
+    SetMode,
+    Stop,
+)
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
@@ -33,6 +45,22 @@ import uvicorn
 
 
 JOINT_NAMES = [f"Joint{index}" for index in range(1, 7)]
+DEBUG_LOG_DIR = Path("/dev/shm")
+DEBUG_LOG_PREFIX = "easyarm_log_"
+DEBUG_LOG_SUFFIX = ".bin"
+DEBUG_FIELDS = {
+    "position_error",
+    "smoothed_position_error",
+    "velocity_error",
+    "motor_velocity_error",
+    "command_position",
+    "state_position",
+    "command_velocity",
+    "state_velocity",
+    "motor_torque",
+    "write_duration_us",
+    "send_fail_count",
+}
 
 
 @dataclass
@@ -115,6 +143,15 @@ def _detect_asset_media_type(suffix: str) -> str:
     return _MIME_EXT.get(suffix, _MIME_DEFAULT)
 
 
+def _debug_log_name_is_valid(name: str) -> bool:
+    return (
+        name.startswith(DEBUG_LOG_PREFIX)
+        and name.endswith(DEBUG_LOG_SUFFIX)
+        and "/" not in name
+        and ".." not in name
+    )
+
+
 class EasyArmWebBridge(Node):
     def __init__(self):
         super().__init__("easyarm_web_bridge")
@@ -157,6 +194,18 @@ class EasyArmWebBridge(Node):
         self.list_controllers_client = self.create_client(
             ListControllers,
             "/controller_manager/list_controllers",
+        )
+        self.set_debug_logger_client = self.create_client(
+            SetDebugLogger,
+            "/easyarm/debug_logger/set_enabled",
+        )
+        self.get_debug_logger_status_client = self.create_client(
+            GetDebugLoggerStatus,
+            "/easyarm/debug_logger/status",
+        )
+        self.list_debug_logs_client = self.create_client(
+            ListDebugLogs,
+            "/easyarm/debug_logger/list_logs",
         )
         self.robot_description_client = self.create_client(
             GetParameters,
@@ -302,6 +351,119 @@ class EasyArmWebBridge(Node):
                 "required_state_interfaces": list(controller.required_state_interfaces),
             })
         return {"success": True, "message": "OK", "controllers": controllers}
+
+    @staticmethod
+    def _debug_status_to_dict(response) -> Dict[str, Any]:
+        return {
+            "success": bool(response.success),
+            "message": response.message,
+            "active": bool(response.active),
+            "path": response.path,
+            "written_count": int(response.written_count),
+            "dropped_count": int(response.dropped_count),
+        }
+
+    def get_debug_status(self) -> Dict[str, Any]:
+        response = self._call_service(
+            self.get_debug_logger_status_client,
+            GetDebugLoggerStatus.Request(),
+        )
+        return self._debug_status_to_dict(response)
+
+    def set_debug_logger(self, enabled: bool) -> Dict[str, Any]:
+        request = SetDebugLogger.Request()
+        request.enabled = bool(enabled)
+        response = self._call_service(
+            self.set_debug_logger_client,
+            request,
+            timeout=max(self.request_timeout_sec, 3.0),
+        )
+        return self._debug_status_to_dict(response)
+
+    def list_debug_logs(self) -> Dict[str, Any]:
+        response = self._call_service(self.list_debug_logs_client, ListDebugLogs.Request())
+        logs = []
+        count = min(len(response.names), len(response.paths), len(response.sizes), len(response.mtimes))
+        for index in range(count):
+            logs.append({
+                "name": response.names[index],
+                "path": response.paths[index],
+                "size": int(response.sizes[index]),
+                "mtime": float(response.mtimes[index]),
+            })
+        return {
+            "success": bool(response.success),
+            "message": response.message,
+            "logs": logs,
+        }
+
+    def resolve_debug_log_path(self, name: str) -> Path:
+        if not _debug_log_name_is_valid(name):
+            raise ValueError("invalid debug log name")
+
+        target = (DEBUG_LOG_DIR / name).resolve()
+        shm = DEBUG_LOG_DIR.resolve()
+        try:
+            target.relative_to(shm)
+        except ValueError as exc:
+            raise ValueError("debug log path traversal denied") from exc
+        if not target.is_file():
+            raise FileNotFoundError(f"debug log not found: {name}")
+        return target
+
+    def download_debug_log(self, name: str) -> FileResponse:
+        path = self.resolve_debug_log_path(name)
+        return FileResponse(
+            path=str(path),
+            media_type="application/octet-stream",
+            filename=name,
+        )
+
+    def read_debug_log_data(
+        self,
+        name: str,
+        joint: int,
+        field: str,
+        start: Optional[float],
+        end: Optional[float],
+        stride: int,
+    ) -> Dict[str, Any]:
+        if joint < 0 or joint >= len(JOINT_NAMES):
+            raise ValueError("joint must be between 0 and 5")
+        if field not in DEBUG_FIELDS:
+            raise ValueError(f"unsupported debug field: {field}")
+        if stride < 1:
+            raise ValueError("stride must be greater than or equal to 1")
+        if start is not None and start < 0.0:
+            raise ValueError("start must be greater than or equal to 0")
+        if end is not None and end < 0.0:
+            raise ValueError("end must be greater than or equal to 0")
+        if start is not None and end is not None and end <= start:
+            raise ValueError("end must be greater than start")
+
+        path = self.resolve_debug_log_path(name)
+        points = []
+        matched = 0
+        for row in iter_samples(path):
+            if int(row["joint_index"]) != joint:
+                continue
+            time_s = float(row["time_s"])
+            if start is not None and time_s < start:
+                continue
+            if end is not None and time_s > end:
+                continue
+            if matched % stride == 0:
+                points.append({"time_s": time_s, "value": float(row[field])})
+            matched += 1
+
+        return {
+            "success": True,
+            "message": "OK" if points else "No samples in selected range",
+            "name": name,
+            "joint": joint,
+            "field": field,
+            "points": points,
+        }
 
     def set_mode(self, mode: str) -> Dict[str, Any]:
         request = SetMode.Request()
@@ -897,6 +1059,58 @@ def create_app(bridge: EasyArmWebBridge) -> FastAPI:
     @app.get("/api/controllers", dependencies=[Depends(check_token)])
     async def controllers():
         return await call_ros(bridge.list_controllers)
+
+    @app.get("/api/debug/status", dependencies=[Depends(check_token)])
+    async def debug_status():
+        return await call_ros(bridge.get_debug_status)
+
+    @app.post("/api/debug/start", dependencies=[Depends(check_token)])
+    async def debug_start():
+        return await call_ros(bridge.set_debug_logger, True)
+
+    @app.post("/api/debug/stop", dependencies=[Depends(check_token)])
+    async def debug_stop():
+        return await call_ros(bridge.set_debug_logger, False)
+
+    @app.get("/api/debug/logs", dependencies=[Depends(check_token)])
+    async def debug_logs():
+        return await call_ros(bridge.list_debug_logs)
+
+    @app.get("/api/debug/logs/{name}/download", dependencies=[Depends(check_token)])
+    async def debug_log_download(name: str):
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, bridge.download_debug_log, name)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/debug/logs/{name}/data", dependencies=[Depends(check_token)])
+    async def debug_log_data(
+        name: str,
+        joint: int = Query(default=0, ge=0, le=5),
+        field: str = Query(default="position_error"),
+        start: Optional[float] = Query(default=None),
+        end: Optional[float] = Query(default=None),
+        stride: int = Query(default=1, ge=1),
+    ):
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(
+                None,
+                bridge.read_debug_log_data,
+                name,
+                joint,
+                field,
+                start,
+                end,
+                stride,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/robot/model", dependencies=[Depends(check_token)])
     async def robot_model():

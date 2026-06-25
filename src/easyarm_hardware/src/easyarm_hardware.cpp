@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -18,8 +19,26 @@ namespace
 {
 constexpr auto kRobotDescriptionTopic = "/robot_description";
 constexpr auto kRobotDescriptionTimeout = std::chrono::seconds(3);
+constexpr auto kDebugLoggerServiceTimeout = std::chrono::seconds(2);
 constexpr const char * kCommandInterfaceKp = "kp";
 constexpr const char * kCommandInterfaceKd = "kd";
+constexpr const char * kDebugLogDirectory = "/dev/shm";
+constexpr const char * kDebugLogPrefix = "easyarm_log_";
+constexpr const char * kDebugLogSuffix = ".bin";
+
+bool is_debug_log_filename(const std::string & name)
+{
+  return name.rfind(kDebugLogPrefix, 0) == 0 &&
+    name.size() >= std::string(kDebugLogPrefix).size() + std::string(kDebugLogSuffix).size() &&
+    name.compare(name.size() - std::string(kDebugLogSuffix).size(), std::string(kDebugLogSuffix).size(), kDebugLogSuffix) == 0;
+}
+
+double file_time_to_unix_seconds(std::filesystem::file_time_type file_time)
+{
+  const auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+    file_time - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+  return std::chrono::duration<double>(system_time.time_since_epoch()).count();
+}
 }
 
 using robstride_can::getMotorParams;
@@ -561,6 +580,7 @@ hardware_interface::return_type EasyArmHardware::write(const rclcpp::Time &, con
   const auto write_start = std::chrono::steady_clock::now();
 
   apply_requested_control_mode();
+  apply_requested_debug_logger();
 
   HardwareDebugSample debug_sample{};
   const bool record_debug = debug_logger_.is_active();
@@ -1014,6 +1034,28 @@ void EasyArmHardware::start_control_mode_node()
     [this](const std::vector<rclcpp::Parameter> & parameters) {
       return on_control_mode_parameters(parameters);
     });
+  set_debug_logger_service_ = control_mode_node_->create_service<easyarm_interfaces::srv::SetDebugLogger>(
+    "/easyarm/debug_logger/set_enabled",
+    [this](
+      const std::shared_ptr<easyarm_interfaces::srv::SetDebugLogger::Request> request,
+      std::shared_ptr<easyarm_interfaces::srv::SetDebugLogger::Response> response) {
+      handle_set_debug_logger(request, response);
+    });
+  get_debug_logger_status_service_ =
+    control_mode_node_->create_service<easyarm_interfaces::srv::GetDebugLoggerStatus>(
+    "/easyarm/debug_logger/status",
+    [this](
+      const std::shared_ptr<easyarm_interfaces::srv::GetDebugLoggerStatus::Request> request,
+      std::shared_ptr<easyarm_interfaces::srv::GetDebugLoggerStatus::Response> response) {
+      handle_get_debug_logger_status(request, response);
+    });
+  list_debug_logs_service_ = control_mode_node_->create_service<easyarm_interfaces::srv::ListDebugLogs>(
+    "/easyarm/debug_logger/list_logs",
+    [this](
+      const std::shared_ptr<easyarm_interfaces::srv::ListDebugLogs::Request> request,
+      std::shared_ptr<easyarm_interfaces::srv::ListDebugLogs::Response> response) {
+      handle_list_debug_logs(request, response);
+    });
 
   control_mode_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
   control_mode_executor_->add_node(control_mode_node_);
@@ -1037,6 +1079,9 @@ void EasyArmHardware::stop_control_mode_node()
   }
 
   control_mode_param_callback_.reset();
+  set_debug_logger_service_.reset();
+  get_debug_logger_status_service_.reset();
+  list_debug_logs_service_.reset();
   control_mode_executor_.reset();
   control_mode_node_.reset();
 }
@@ -1086,6 +1131,103 @@ bool EasyArmHardware::request_control_mode(ControlMode mode, std::string & messa
   requested_control_mode_.store(static_cast<int>(mode));
   message = std::string("requested ") + hardware_control_mode_name(mode);
   return true;
+}
+
+void EasyArmHardware::handle_set_debug_logger(
+  const std::shared_ptr<easyarm_interfaces::srv::SetDebugLogger::Request> request,
+  std::shared_ptr<easyarm_interfaces::srv::SetDebugLogger::Response> response)
+{
+  uint64_t generation = 0;
+  {
+    std::lock_guard<std::mutex> lock(debug_request_mutex_);
+    debug_request_enabled_ = request->enabled;
+    debug_request_pending_ = true;
+    generation = ++debug_request_generation_;
+  }
+
+  debug_request_cv_.notify_all();
+
+  std::unique_lock<std::mutex> lock(debug_request_mutex_);
+  const bool applied = debug_request_cv_.wait_for(
+    lock,
+    kDebugLoggerServiceTimeout,
+    [this, generation]() {
+      return debug_applied_generation_ >= generation;
+    });
+
+  if (!applied) {
+    lock.unlock();
+    fill_debug_logger_status(
+      *response,
+      false,
+      "Timed out waiting for hardware write loop to apply debug logger request");
+    return;
+  }
+
+  const bool success = debug_request_success_;
+  const std::string message = debug_request_message_;
+  lock.unlock();
+  fill_debug_logger_status(*response, success, message);
+}
+
+void EasyArmHardware::handle_get_debug_logger_status(
+  const std::shared_ptr<easyarm_interfaces::srv::GetDebugLoggerStatus::Request>,
+  std::shared_ptr<easyarm_interfaces::srv::GetDebugLoggerStatus::Response> response)
+{
+  fill_debug_logger_status(*response, true, "OK");
+}
+
+void EasyArmHardware::handle_list_debug_logs(
+  const std::shared_ptr<easyarm_interfaces::srv::ListDebugLogs::Request>,
+  std::shared_ptr<easyarm_interfaces::srv::ListDebugLogs::Response> response)
+{
+  response->success = true;
+  response->message = "OK";
+
+  try {
+    if (!std::filesystem::exists(kDebugLogDirectory)) {
+      return;
+    }
+
+    struct LogEntry
+    {
+      std::string name;
+      std::string path;
+      uint64_t size{0};
+      double mtime{0.0};
+    };
+    std::vector<LogEntry> entries;
+
+    for (const auto & entry : std::filesystem::directory_iterator(kDebugLogDirectory)) {
+      if (!entry.is_regular_file()) {
+        continue;
+      }
+      const auto name = entry.path().filename().string();
+      if (!is_debug_log_filename(name)) {
+        continue;
+      }
+      entries.push_back({
+        name,
+        entry.path().string(),
+        static_cast<uint64_t>(entry.file_size()),
+        file_time_to_unix_seconds(entry.last_write_time()),
+      });
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const auto & lhs, const auto & rhs) {
+      return lhs.mtime > rhs.mtime;
+    });
+
+    for (const auto & entry : entries) {
+      response->names.push_back(entry.name);
+      response->paths.push_back(entry.path);
+      response->sizes.push_back(entry.size);
+      response->mtimes.push_back(entry.mtime);
+    }
+  } catch (const std::filesystem::filesystem_error & error) {
+    response->success = false;
+    response->message = error.what();
+  }
 }
 
 void EasyArmHardware::apply_requested_control_mode()

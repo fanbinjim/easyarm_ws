@@ -3,11 +3,17 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "easyarm_interfaces/srv/get_debug_logger_status.hpp"
+#include "easyarm_interfaces/srv/list_debug_logs.hpp"
+#include "easyarm_interfaces/srv/set_debug_logger.hpp"
 #include "easyarm_hardware/debug_logger.hpp"
 #include "easyarm_dynamics/robot_model.hpp"
 #include "hardware_interface/handle.hpp"
@@ -62,6 +68,14 @@ struct JointConfig
   double kd{0.0};
 };
 
+struct DebugLoggerStatus
+{
+  bool active{false};
+  std::string path;
+  uint64_t written_count{0};
+  uint64_t dropped_count{0};
+};
+
 class EasyArmHardware : public hardware_interface::SystemInterface
 {
 public:
@@ -109,7 +123,27 @@ private:
   rcl_interfaces::msg::SetParametersResult on_control_mode_parameters(
     const std::vector<rclcpp::Parameter> & parameters);
   bool request_control_mode(ControlMode mode, std::string & message);
+  void handle_set_debug_logger(
+    const std::shared_ptr<easyarm_interfaces::srv::SetDebugLogger::Request> request,
+    std::shared_ptr<easyarm_interfaces::srv::SetDebugLogger::Response> response);
+  void handle_get_debug_logger_status(
+    const std::shared_ptr<easyarm_interfaces::srv::GetDebugLoggerStatus::Request> request,
+    std::shared_ptr<easyarm_interfaces::srv::GetDebugLoggerStatus::Response> response);
+  void handle_list_debug_logs(
+    const std::shared_ptr<easyarm_interfaces::srv::ListDebugLogs::Request> request,
+    std::shared_ptr<easyarm_interfaces::srv::ListDebugLogs::Response> response);
   void apply_requested_control_mode();
+  void apply_requested_debug_logger();
+  bool apply_debug_logger_enabled(bool enabled, std::string & message);
+  DebugLoggerStatus debug_logger_status() const;
+  void fill_debug_logger_status(
+    easyarm_interfaces::srv::SetDebugLogger::Response & response,
+    bool success,
+    const std::string & message) const;
+  void fill_debug_logger_status(
+    easyarm_interfaces::srv::GetDebugLoggerStatus::Response & response,
+    bool success,
+    const std::string & message) const;
   void reset_command_filters_to_current_state();
   bool switch_motor_mode(MotorControlMode mode);
   void sync_states_to_commands();
@@ -168,6 +202,15 @@ private:
   DebugLoggerConfig debug_logger_config_;
   DebugLogger debug_logger_;
   uint64_t debug_sequence_{0};
+  mutable std::mutex debug_state_mutex_;
+  std::mutex debug_request_mutex_;
+  std::condition_variable debug_request_cv_;
+  bool debug_request_pending_{false};
+  bool debug_request_enabled_{false};
+  bool debug_request_success_{true};
+  std::string debug_request_message_{"OK"};
+  uint64_t debug_request_generation_{0};
+  uint64_t debug_applied_generation_{0};
   MotorControlMode desired_motor_mode_{MotorControlMode::MotionControl};
   MotorControlMode active_motor_mode_{MotorControlMode::MotionControl};
   ControlMode control_mode_{ControlMode::Position};
@@ -176,6 +219,9 @@ private:
 
   rclcpp::Node::SharedPtr control_mode_node_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr control_mode_param_callback_;
+  rclcpp::Service<easyarm_interfaces::srv::SetDebugLogger>::SharedPtr set_debug_logger_service_;
+  rclcpp::Service<easyarm_interfaces::srv::GetDebugLoggerStatus>::SharedPtr get_debug_logger_status_service_;
+  rclcpp::Service<easyarm_interfaces::srv::ListDebugLogs>::SharedPtr list_debug_logs_service_;
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> control_mode_executor_;
   std::thread control_mode_executor_thread_;
 
