@@ -213,6 +213,8 @@ class EasyArmWebBridge(Node):
         )
 
         self._robot_description_cache: Optional[str] = None
+        self._mock_hardware_cache: Optional[bool] = None
+        self._mock_hardware_cache_time: float = 0.0
 
         self.speedj_pub = self.create_publisher(JointJog, "/easyarm/speedj_cmd", 10)
         self.speedl_pub = self.create_publisher(TwistStamped, "/easyarm/speedl_cmd", 10)
@@ -790,9 +792,30 @@ class EasyArmWebBridge(Node):
         except Exception:
             return None
 
+    def _fetch_robot_description_uncached(self) -> Optional[str]:
+        try:
+            request = GetParameters.Request()
+            request.names = ["robot_description"]
+            result = self._call_service(
+                self.robot_description_client, request,
+                timeout=self.request_timeout_sec,
+            )
+            if not result.values or not result.values[0].string_value:
+                return None
+            return result.values[0].string_value
+        except Exception:
+            return None
+
     def _detect_mock_hardware(self) -> Optional[bool]:
-        urdf = self._ensure_robot_description_cache()
+        _MOCK_TTL_SEC = 2.0
+        now = _now()
+        if self._mock_hardware_cache is not None and (now - self._mock_hardware_cache_time) < _MOCK_TTL_SEC:
+            return self._mock_hardware_cache
+
+        urdf = self._fetch_robot_description_uncached()
         if urdf is None:
+            if self._mock_hardware_cache is not None:
+                return self._mock_hardware_cache
             return None
         try:
             root = ET.fromstring(urdf)
@@ -800,9 +823,15 @@ class EasyArmWebBridge(Node):
                 if param.get("name") == "use_mock_hardware":
                     value = (param.text or "").strip().lower()
                     if value == "true":
+                        self._mock_hardware_cache = True
+                        self._mock_hardware_cache_time = now
                         return True
                     if value == "false":
+                        self._mock_hardware_cache = False
+                        self._mock_hardware_cache_time = now
                         return False
+                    self._mock_hardware_cache = None
+                    self._mock_hardware_cache_time = now
                     return None
         except ET.ParseError:
             pass

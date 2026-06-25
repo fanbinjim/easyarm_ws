@@ -26,7 +26,7 @@ def generate_launch_description():
     use_mock_hardware = LaunchConfiguration("use_mock_hardware", default="false")
     debug_enable = LaunchConfiguration("debug_enable", default="false")
     rviz = LaunchConfiguration("rviz", default="false")
-    moveit_servo = LaunchConfiguration("moveit_servo", default="false")
+    moveit_servo = LaunchConfiguration("moveit_servo", default="true")
     web = LaunchConfiguration("web", default="false")
     web_backend_host = LaunchConfiguration("web_backend_host", default="127.0.0.1")
     web_backend_port = LaunchConfiguration("web_backend_port", default="8000")
