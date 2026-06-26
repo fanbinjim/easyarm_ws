@@ -4,11 +4,13 @@ import { PoseEditor, DEFAULT_MOVEL } from "../ui/PoseEditor";
 import { StreamButtons } from "../ui/StreamButtons";
 import { api } from "../api/client";
 import { Gauge } from "lucide-react";
+import { GamepadControlPanel } from "./GamepadControlPanel";
+import type { PoseResponse, StreamCommand } from "../api/types";
 
 const JOINT_NAMES = ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"];
 const DEFAULTS = { joints: [0, 1.85005, 2.68781, 0.9599, 1.57, 0] };
 
-export function StreamPanel({ open: defaultOpen = false }: { open?: boolean }) {
+export function StreamPanel({ open: defaultOpen = false, pose }: { open?: boolean; pose: PoseResponse | null }) {
   const [open, setOpen] = useState(defaultOpen);
   const [speedJ, setSpeedJ] = useState([0, 0, 0, 0, 0, 0]);
   const [speedL, setSpeedL] = useState([0, 0, 0, 0, 0, 0]);
@@ -18,6 +20,10 @@ export function StreamPanel({ open: defaultOpen = false }: { open?: boolean }) {
 
   const halt = useCallback(() => {
     cmdRef.current.send({ type: "halt" });
+  }, []);
+
+  const sendStreamCommand = useCallback((command: StreamCommand) => {
+    cmdRef.current.send(command);
   }, []);
 
   return (
@@ -62,6 +68,8 @@ export function StreamPanel({ open: defaultOpen = false }: { open?: boolean }) {
             onStop={halt}
           />
         </div>
+
+        <GamepadControlPanel pose={pose} onSend={sendStreamCommand} onHalt={halt} />
       </div>
     </details>
   );

@@ -711,6 +711,44 @@ input, select {
   flex-wrap: wrap;
 }
 
+.gamepad-card {
+  grid-column: span 2;
+}
+
+.gamepad-status-grid {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 7px 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.gamepad-status-grid span {
+  color: #61736c;
+  font-weight: 800;
+}
+
+.gamepad-status-grid strong {
+  min-width: 0;
+  color: #1e332c;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.gamepad-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gamepad-help {
+  margin-top: 9px;
+  color: #60736c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* Log */
 .log-panel {
   margin-top: 14px;
@@ -1404,6 +1442,7 @@ input, select {
   .workspace-grid { grid-template-columns: 1fr; }
   .workspace-side { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stream-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gamepad-card { grid-column: span 2; }
   .debug-grid { grid-template-columns: 1fr; }
   .debug-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .debug-form-grid.multi { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1415,6 +1454,7 @@ input, select {
   .status-bar { flex-direction: column; align-items: stretch; }
   .status-bar-left, .status-bar-right { width: 100%; }
   .summary-grid, .workspace-side, .stream-grid, .parameter-grid { grid-template-columns: 1fr; }
+  .gamepad-card { grid-column: auto; }
   .number-grid { grid-template-columns: 1fr; }
   .joint-slider-row { grid-template-columns: 56px minmax(0, 1fr); }
   .joint-slider-row input[type="number"] { grid-column: 2; width: 100%; }

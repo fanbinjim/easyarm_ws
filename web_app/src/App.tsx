@@ -269,7 +269,7 @@ function AppInner() {
             onMoveNamedState={handleMoveNamed}
             busy={busyRef.current}
           />
-          <StreamPanel />
+          <StreamPanel pose={apiState.pose} />
           <DebugDataPanel token={settings.token} />
         </div>
 
