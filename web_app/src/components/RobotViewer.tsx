@@ -483,6 +483,7 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
   const [viewState, setViewState] = useState<ViewState>("loading");
   const [errorMsg, setErrorMsg] = useState("");
   const [viewCubeHint, setViewCubeHint] = useState("");
+  const [sceneVersion, setSceneVersion] = useState(0);
   const sceneRef = useRef<{
     robot: URDFRobot | null;
     ghostRobot: URDFRobot | null;
@@ -571,6 +572,7 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
         resizeObserver.observe(container);
         localScene.resizeObserver = resizeObserver;
         setViewState("ready");
+        setSceneVersion((version) => version + 1);
 
         let model;
         let urdfXml = "";
@@ -591,46 +593,45 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
 
         const assetBase = model.asset_base_url;
         try {
+          const URDFLoaderCtor = await loadURDFLoader();
+          const loader = new URDFLoaderCtor();
+          const ghostLoader = new URDFLoaderCtor();
 
-        const URDFLoaderCtor = await loadURDFLoader();
-        const loader = new URDFLoaderCtor();
-        const ghostLoader = new URDFLoaderCtor();
+          (loader as unknown as { loadMeshCb: MeshLoadCb }).loadMeshCb = createMeshLoader(assetBase, false);
+          (ghostLoader as unknown as { loadMeshCb: MeshLoadCb }).loadMeshCb = createMeshLoader(assetBase, true);
 
-        (loader as unknown as { loadMeshCb: MeshLoadCb }).loadMeshCb = createMeshLoader(assetBase, false);
-        (ghostLoader as unknown as { loadMeshCb: MeshLoadCb }).loadMeshCb = createMeshLoader(assetBase, true);
+          (loader as unknown as { packages: (pkg: string) => string }).packages = (pkg: string) => `/api/robot/assets/${pkg}`;
+          (ghostLoader as unknown as { packages: (pkg: string) => string }).packages = (pkg: string) => `/api/robot/assets/${pkg}`;
 
-        (loader as unknown as { packages: (pkg: string) => string }).packages = (pkg: string) => `/api/robot/assets/${pkg}`;
-        (ghostLoader as unknown as { packages: (pkg: string) => string }).packages = (pkg: string) => `/api/robot/assets/${pkg}`;
+          const robot = (loader as unknown as { parse: (xml: string, workingPath?: string) => URDFRobot }).parse(urdfXml, "");
+          robot.rotation.x = -Math.PI / 2;
+          const ghostRobot = (ghostLoader as unknown as { parse: (xml: string, workingPath?: string) => URDFRobot }).parse(urdfXml, "");
+          ghostRobot.rotation.x = -Math.PI / 2;
+          ghostRobot.visible = false;
+          applyGhostMaterial(ghostRobot);
 
-        const robot = (loader as unknown as { parse: (xml: string, workingPath?: string) => URDFRobot }).parse(urdfXml, "");
-        robot.rotation.x = -Math.PI / 2;
-        const ghostRobot = (ghostLoader as unknown as { parse: (xml: string, workingPath?: string) => URDFRobot }).parse(urdfXml, "");
-        ghostRobot.rotation.x = -Math.PI / 2;
-        ghostRobot.visible = false;
-        applyGhostMaterial(ghostRobot);
+          if (disposed) return;
 
-        if (disposed) return;
-
-        const jointMap = new Map<string, { setJointValue: (v: number) => void }>();
-        const ghostJointMap = new Map<string, { setJointValue: (v: number) => void }>();
-        if (robot && robot.joints) {
-          for (const name of model.joint_names) {
-            if (robot.joints[name]) {
-              jointMap.set(name, robot.joints[name]);
-            }
-            if (ghostRobot.joints[name]) {
-              ghostJointMap.set(name, ghostRobot.joints[name]);
+          const jointMap = new Map<string, { setJointValue: (v: number) => void }>();
+          const ghostJointMap = new Map<string, { setJointValue: (v: number) => void }>();
+          if (robot && robot.joints) {
+            for (const name of model.joint_names) {
+              if (robot.joints[name]) {
+                jointMap.set(name, robot.joints[name]);
+              }
+              if (ghostRobot.joints[name]) {
+                ghostJointMap.set(name, ghostRobot.joints[name]);
+              }
             }
           }
-        }
 
-        scene.add(robot);
-        scene.add(ghostRobot);
-        localScene.robot = robot;
-        localScene.ghostRobot = ghostRobot;
-        localScene.joints = jointMap;
-        localScene.ghostJoints = ghostJointMap;
-        localScene.jointNames = model.joint_names;
+          scene.add(robot);
+          scene.add(ghostRobot);
+          localScene.robot = robot;
+          localScene.ghostRobot = ghostRobot;
+          localScene.joints = jointMap;
+          localScene.ghostJoints = ghostJointMap;
+          localScene.jointNames = model.joint_names;
         } catch (err) {
           console.warn("Robot URDF unavailable; rendering scene without robot.", err);
           return;
@@ -730,7 +731,7 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
     };
     animate();
     return () => cancelAnimationFrame(animId);
-  }, [viewState]);
+  }, [viewState, sceneVersion]);
 
   const resetCamera = () => {
     const camera = sceneRef.current.camera;

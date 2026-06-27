@@ -12,7 +12,9 @@ type Props = {
 };
 
 const DEADZONE = 0.12;
-const SEND_HZ = 40;
+const SEND_HZ = 30;
+const SEND_INTERVAL_MS = 1000 / SEND_HZ;
+const SEND_DT_SEC = 1 / SEND_HZ;
 const BASE_LINEAR_SPEED = 0.05;
 const BASE_ANGULAR_SPEED = 0.45;
 const SLOW_SCALE = 0.35;
@@ -113,7 +115,6 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
   const [scaleLabel, setScaleLabel] = useState("1.00x");
   const targetPoseRef = useRef<PoseValues | null>(null);
   const latestPoseRef = useRef<PoseResponse | null>(pose);
-  const lastTimeRef = useRef(0);
   const previousButtonsRef = useRef<boolean[]>([]);
   const haltedRef = useRef(true);
   const statusRef = useRef(status);
@@ -149,6 +150,7 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
   }, [updateStatus]);
 
   const halt = useCallback(() => {
+    if (haltedRef.current) return;
     onHalt();
     haltedRef.current = true;
   }, [onHalt]);
@@ -160,10 +162,9 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
       return;
     }
 
-    let frame = 0;
-    const intervalMs = 1000 / SEND_HZ;
+    let timer: ReturnType<typeof window.setInterval> | null = null;
 
-    const tick = (time: number) => {
+    const tick = () => {
       const gamepads = navigator.getGamepads?.() ?? [];
       const gamepad = Array.from(gamepads).find(Boolean) ?? null;
       updateGamepadName(gamepad?.id ?? "");
@@ -171,13 +172,9 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
       if (!gamepad) {
         updateStatus("未检测到手柄");
         halt();
-        frame = window.requestAnimationFrame(tick);
         return;
       }
 
-      if (lastTimeRef.current === 0) lastTimeRef.current = time;
-      const dt = Math.min(0.1, Math.max(0, (time - lastTimeRef.current) / 1000));
-      const elapsed = time - lastTimeRef.current;
       const buttons = gamepad.buttons.map((button) => button.pressed);
       const wasPressed = (index: number) => previousButtonsRef.current[index] === true;
       const rising = (index: number) => buttons[index] && !wasPressed(index);
@@ -197,47 +194,42 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
 
       if (rising(BUTTON_BACK)) syncServoLTarget();
 
-      if (elapsed >= intervalMs) {
-        const scale = pressed(gamepad, BUTTON_RB) ? FAST_SCALE : pressed(gamepad, BUTTON_LB) ? SLOW_SCALE : 1.0;
-        updateScaleLabel(`${scale.toFixed(2)}x${pressed(gamepad, BUTTON_RB) ? " RB" : pressed(gamepad, BUTTON_LB) ? " LB" : ""}`);
-        const twist = buildTwist(gamepad, scale);
+      const scale = pressed(gamepad, BUTTON_RB) ? FAST_SCALE : pressed(gamepad, BUTTON_LB) ? SLOW_SCALE : 1.0;
+      updateScaleLabel(`${scale.toFixed(2)}x${pressed(gamepad, BUTTON_RB) ? " RB" : pressed(gamepad, BUTTON_LB) ? " LB" : ""}`);
+      const twist = buildTwist(gamepad, scale);
 
-        if (mode === "speedl") {
-          onSend({ type: "speedl", twist, frame_id: "base_link" });
-          updateStatus("SpeedL sending");
-        } else {
-          if (!targetPoseRef.current) {
-            const current = poseToValues(latestPoseRef.current);
-            targetPoseRef.current = current;
-          }
-          if (!targetPoseRef.current) {
-            updateStatus("ServoL 需要当前末端位姿");
-          } else {
-            const target = targetPoseRef.current;
-            target.x += twist[0] * dt;
-            target.y += twist[1] * dt;
-            target.z += twist[2] * dt;
-            const delta = deltaQuaternion(twist[3], twist[4], twist[5], dt);
-            const rotated = multiplyQuaternion(target, delta);
-            targetPoseRef.current = normalizeQuaternion({ ...target, ...rotated });
-            onSend({ type: "servol", ...targetPoseRef.current, frame_id: "base_link" });
-            updateStatus("ServoL sending");
-          }
+      if (mode === "speedl") {
+        onSend({ type: "speedl", twist, frame_id: "base_link" });
+        updateStatus("SpeedL sending");
+      } else {
+        if (!targetPoseRef.current) {
+          const current = poseToValues(latestPoseRef.current);
+          targetPoseRef.current = current;
         }
-
-        haltedRef.current = false;
-        lastTimeRef.current = time;
+        if (!targetPoseRef.current) {
+          updateStatus("ServoL 需要当前末端位姿");
+        } else {
+          const target = targetPoseRef.current;
+          target.x += twist[0] * SEND_DT_SEC;
+          target.y += twist[1] * SEND_DT_SEC;
+          target.z += twist[2] * SEND_DT_SEC;
+          const delta = deltaQuaternion(twist[3], twist[4], twist[5], SEND_DT_SEC);
+          const rotated = multiplyQuaternion(target, delta);
+          targetPoseRef.current = normalizeQuaternion({ ...target, ...rotated });
+          onSend({ type: "servol", ...targetPoseRef.current, frame_id: "base_link" });
+          updateStatus("ServoL sending");
+        }
       }
 
+      haltedRef.current = false;
       previousButtonsRef.current = buttons;
-      frame = window.requestAnimationFrame(tick);
     };
 
-    frame = window.requestAnimationFrame(tick);
+    tick();
+    timer = window.setInterval(tick, SEND_INTERVAL_MS);
     return () => {
-      window.cancelAnimationFrame(frame);
+      if (timer) window.clearInterval(timer);
       halt();
-      lastTimeRef.current = 0;
     };
   }, [enabled, halt, mode, onSend, syncServoLTarget, updateGamepadName, updateScaleLabel, updateStatus]);
 

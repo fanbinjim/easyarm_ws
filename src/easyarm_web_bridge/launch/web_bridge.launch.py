@@ -27,7 +27,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "host",
-                default_value="127.0.0.1",
+                default_value="0.0.0.0",
                 description="Host address for the EasyArm web bridge backend.",
             ),
             DeclareLaunchArgument(
@@ -37,7 +37,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "token",
-                default_value=EnvironmentVariable("EASYARM_WEB_TOKEN", default_value=""),
+                default_value=EnvironmentVariable("EASYARM_WEB_TOKEN", default_value="easyarm"),
                 description="Required token for browser/API access.",
             ),
             web_bridge,

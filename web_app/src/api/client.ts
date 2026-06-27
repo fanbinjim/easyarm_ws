@@ -396,7 +396,7 @@ export class TelemetrySocket {
 
 export class CommandSocket {
   private _ws: WebSocket | null = null;
-  private _pending: (() => void)[] = [];
+  private _pending: StreamCommand | null = null;
   private _intentional = false;
 
   get readyState(): number {
@@ -404,14 +404,16 @@ export class CommandSocket {
   }
 
   connect(): void {
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) return;
+    if (this._ws && this._ws.readyState !== WebSocket.CLOSED) return;
     this._intentional = false;
     this._ws = new WebSocket(wsUrl("/ws/command-stream"));
     const ws = this._ws;
 
     ws.onopen = () => {
-      for (const cb of this._pending) cb();
-      this._pending = [];
+      if (this._pending) {
+        ws.send(JSON.stringify(this._pending));
+        this._pending = null;
+      }
     };
 
     ws.onclose = () => {
@@ -423,17 +425,11 @@ export class CommandSocket {
   }
 
   send(command: StreamCommand): void {
-    const doSend = () => {
-      if (this._ws?.readyState === WebSocket.OPEN) {
-        this._ws.send(JSON.stringify(command));
-      }
-    };
-
-    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) {
-      this.connect();
-      this._pending.push(doSend);
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify(command));
     } else {
-      doSend();
+      this._pending = command;
+      this.connect();
     }
   }
 
@@ -441,7 +437,7 @@ export class CommandSocket {
     this._intentional = true;
     this._ws?.close();
     this._ws = null;
-    this._pending = [];
+    this._pending = null;
   }
 }
 
