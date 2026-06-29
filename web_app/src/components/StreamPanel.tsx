@@ -26,12 +26,20 @@ export function StreamPanel({ open: defaultOpen = false, pose }: { open?: boolea
     cmdRef.current.send(command);
   }, []);
 
+  const toggleOpen = useCallback(() => {
+    setOpen((value) => {
+      const next = !value;
+      if (!next) halt();
+      return next;
+    });
+  }, [halt]);
+
   return (
     <details className="panel stream-section" open={open}>
       <summary
         onClick={(event) => {
           event.preventDefault();
-          setOpen((value) => !value);
+          toggleOpen();
         }}
       >
         <span><Gauge /> 流式控制</span>
@@ -74,7 +82,7 @@ export function StreamPanel({ open: defaultOpen = false, pose }: { open?: boolea
           />
         </div>
 
-        <GamepadControlPanel pose={pose} onSend={sendStreamCommand} onHalt={halt} />
+        <GamepadControlPanel pose={pose} panelOpen={open} onSend={sendStreamCommand} onHalt={halt} />
       </div>
     </details>
   );

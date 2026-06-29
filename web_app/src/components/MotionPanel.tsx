@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Play, Send, ListChecks, Gauge } from "lucide-react";
+import { Play, Send, Gauge } from "lucide-react";
 import { PoseEditor, type PoseValues } from "../ui/PoseEditor";
 import { Range } from "../ui/Range";
 import type { JointTarget, NamedStateResponse } from "../api/types";
@@ -28,7 +28,6 @@ type Props = {
 const TABS = [
   { key: "movej", label: "MoveJ", icon: <Send /> },
   { key: "movel", label: "MoveL", icon: <Send /> },
-  { key: "named", label: "预设位姿", icon: <ListChecks /> },
 ] as const;
 
 type MotionTab = (typeof TABS)[number]["key"];
@@ -51,14 +50,10 @@ export function MotionPanel({
   const [tab, setTab] = useState<MotionTab>("movej");
   const [moveJValues, setMoveJValues] = useState(DEFAULT_MOVEJ);
   const [moveLValues, setMoveLValues] = useState({ x: 0.25, y: 0, z: 0.25, qx: 0, qy: 0, qz: 0, qw: 1 });
-  const [selectedNamed, setSelectedNamed] = useState("");
   const [open, setOpen] = useState(false);
 
   const namedStatesList = namedStates?.states ?? [];
-  const activeNamedValues = useMemo(
-    () => namedStatesList.find((s) => s.name === selectedNamed)?.positions ?? [],
-    [namedStatesList, selectedNamed],
-  );
+  const namedJointNames = useMemo(() => namedStates?.joint_names ?? JOINT_NAMES, [namedStates?.joint_names]);
 
   const actionLabel = planOnly ? "规划" : "执行";
 
@@ -72,19 +67,8 @@ export function MotionPanel({
       return;
     }
 
-    if (tab === "named" && activeNamedValues.length > 0) {
-      onJointTargetChange({ names: namedStates?.joint_names ?? JOINT_NAMES, positions: activeNamedValues });
-      return;
-    }
-
     onJointTargetChange(null);
-  }, [activeNamedValues, moveJValues, namedStates?.joint_names, onJointTargetChange, tab]);
-
-  useEffect(() => {
-    if (!selectedNamed && namedStatesList.length > 0) {
-      setSelectedNamed(namedStatesList[0].name);
-    }
-  }, [namedStatesList, selectedNamed]);
+  }, [moveJValues, onJointTargetChange, tab]);
 
   const toggleOpen = () => {
     const nextOpen = !open;
@@ -97,10 +81,37 @@ export function MotionPanel({
   const tabContent: Record<MotionTab, ReactNode> = {
     movej: (
       <div className="motion-tab-content">
-        <JointSliderGrid values={moveJValues} onChange={setMoveJValues} />
-        <button disabled={busy} onClick={() => onMoveJ(moveJValues)}>
-          <Play /> {actionLabel} MoveJ
-        </button>
+        <div className="movej-layout">
+          <div className="movej-editor">
+            <JointSliderGrid values={moveJValues} onChange={setMoveJValues} />
+            <button disabled={busy} onClick={() => onMoveJ(moveJValues)}>
+              <Play /> {actionLabel} MoveJ
+            </button>
+          </div>
+          <div className="named-state-panel">
+            <div className="named-state-title">预设位姿</div>
+            {namedStatesList.length === 0 ? (
+              <div className="empty-hint">暂无预设位姿</div>
+            ) : (
+              <div className="named-state-buttons">
+                {namedStatesList.map((state) => (
+                  <button
+                    key={state.name}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setMoveJValues(state.positions);
+                      onJointTargetChange({ names: namedJointNames, positions: state.positions });
+                      onMoveNamedState(state.name);
+                    }}
+                  >
+                    {state.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     ),
     movel: (
@@ -108,24 +119,6 @@ export function MotionPanel({
         <PoseEditor value={moveLValues} onChange={setMoveLValues} />
         <button disabled={busy} onClick={() => onMoveL(moveLValues)}>
           <Play /> {actionLabel} MoveL
-        </button>
-      </div>
-    ),
-    named: (
-      <div className="motion-tab-content">
-        <select value={selectedNamed} onChange={(e) => setSelectedNamed(e.target.value)}>
-          <option value="" disabled>选择一个姿态</option>
-          {namedStatesList.map((s) => (
-            <option key={s.name} value={s.name}>{s.name}</option>
-          ))}
-        </select>
-        <div className="named-values">
-          {activeNamedValues.length > 0
-            ? activeNamedValues.map((v) => v.toFixed(4)).join(" ")
-            : "未选择"}
-        </div>
-        <button disabled={busy || !selectedNamed} onClick={() => onMoveNamedState(selectedNamed)}>
-          <Play /> {actionLabel} 预设位姿
         </button>
       </div>
     ),

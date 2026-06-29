@@ -487,6 +487,65 @@ input, select {
   align-self: flex-start;
 }
 
+.movej-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  gap: 14px;
+  align-items: start;
+}
+
+.movej-editor {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.movej-editor > button {
+  align-self: flex-start;
+}
+
+.movej-layout .joint-slider-row {
+  grid-template-columns: 56px minmax(120px, 1fr) 92px;
+}
+
+.movej-layout .joint-slider-row input[type="number"] {
+  width: 92px;
+}
+
+.named-state-panel {
+  min-width: 0;
+  border: 1px solid #e1e9e5;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfb;
+}
+
+.named-state-title {
+  margin-bottom: 10px;
+  color: #1e332c;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.named-state-buttons {
+  display: grid;
+  gap: 8px;
+}
+
+.named-state-buttons button {
+  min-height: 36px;
+  justify-content: flex-start;
+  border-color: #b9d8c8;
+  background: #e7f5ee;
+  color: #0d513b;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.named-state-buttons button:hover:not(:disabled) {
+  background: #dff3e9;
+}
+
 /* Number Grid */
 .number-grid {
   display: grid;
@@ -533,19 +592,6 @@ input, select {
 .joint-slider-row input[type="number"] {
   width: 112px;
   font-variant-numeric: tabular-nums;
-}
-
-/* 预设位姿 */
-.named-values {
-  min-height: 60px;
-  margin: 10px 0;
-  padding: 9px;
-  background: #f4f7f5;
-  border: 1px solid #e0e8e4;
-  border-radius: 6px;
-  overflow-wrap: anywhere;
-  color: #30463f;
-  line-height: 1.5;
 }
 
 /* Metrics */
@@ -1054,6 +1100,13 @@ input, select {
   border-color: #8f1d27;
 }
 
+.execute-mode .movej-editor > button,
+.execute-mode .named-state-buttons button {
+  background: #9f1f2b;
+  border-color: #8f1d27;
+  color: #fff;
+}
+
 /* Debug / Data Analysis */
 .debug-panel {
   border-color: #c9d8d2;
@@ -1513,8 +1566,11 @@ input, select {
   .summary-grid, .workspace-side, .stream-grid, .parameter-grid { grid-template-columns: 1fr; }
   .gamepad-card { grid-column: auto; }
   .number-grid { grid-template-columns: 1fr; }
+  .movej-layout { grid-template-columns: 1fr; }
   .joint-slider-row { grid-template-columns: 56px minmax(0, 1fr); }
+  .movej-layout .joint-slider-row { grid-template-columns: 56px minmax(0, 1fr); }
   .joint-slider-row input[type="number"] { grid-column: 2; width: 100%; }
+  .movej-layout .joint-slider-row input[type="number"] { width: 100%; }
   .debug-form-grid { grid-template-columns: 1fr; }
   .debug-form-grid.multi { grid-template-columns: 1fr; }
   .debug-status-grid { grid-template-columns: 1fr; }

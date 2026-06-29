@@ -8,6 +8,7 @@ type GamepadMode = "speedl" | "servol";
 
 type Props = {
   pose: PoseResponse | null;
+  panelOpen: boolean;
   onSend: (command: StreamCommand) => void;
   onHalt: () => void;
 };
@@ -112,7 +113,7 @@ function buildTwist(gamepad: Gamepad, scale: number): number[] {
 /**
  * Xbox 手柄控制面板，支持 SpeedL 速度控制和 ServoL 速度积分到目标位姿。
  */
-export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
+export function GamepadControlPanel({ pose, panelOpen, onSend, onHalt }: Props) {
   const [enabled, setEnabled] = useState(false);
   const [mode, setMode] = useState<GamepadMode>("speedl");
   const [status, setStatus] = useState("未启用");
@@ -164,6 +165,14 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
     onHalt();
     haltedRef.current = true;
   }, [onHalt]);
+
+  useEffect(() => {
+    if (panelOpen) return;
+    setEnabled(false);
+    previousButtonsRef.current = [];
+    halt();
+    updateStatus("未启用");
+  }, [halt, panelOpen, updateStatus]);
 
   useEffect(() => {
     if (!enabled) {
