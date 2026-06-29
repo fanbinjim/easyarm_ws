@@ -3,9 +3,10 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, RegisterEventHandler
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -28,6 +29,14 @@ def generate_launch_description():
     rviz = LaunchConfiguration("rviz", default="false")
     moveit_servo = LaunchConfiguration("moveit_servo", default="true")
     web = LaunchConfiguration("web", default="true")
+    camera = LaunchConfiguration("camera", default="false")
+    camera_enable_color = LaunchConfiguration("camera_enable_color", default="true")
+    camera_enable_depth = LaunchConfiguration("camera_enable_depth", default="false")
+    camera_align_depth = LaunchConfiguration("camera_align_depth", default="false")
+    camera_pointcloud = LaunchConfiguration("camera_pointcloud", default="false")
+    camera_enable_sync = LaunchConfiguration("camera_enable_sync", default="true")
+    camera_publish_tf = LaunchConfiguration("camera_publish_tf", default="false")
+    camera_color_profile = LaunchConfiguration("camera_color_profile", default="640x480x30")
     web_backend_host = LaunchConfiguration("web_backend_host", default="0.0.0.0")
     web_backend_port = LaunchConfiguration("web_backend_port", default="8000")
     web_token = LaunchConfiguration("web_token", default="easyarm")
@@ -199,6 +208,34 @@ def generate_launch_description():
         condition=IfCondition(web),
     )
 
+    realsense_camera = GroupAction(
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution(
+                        [
+                            FindPackageShare("realsense2_camera"),
+                            "launch",
+                            "rs_launch.py",
+                        ]
+                    )
+                ),
+                launch_arguments={
+                    "enable_color": camera_enable_color,
+                    "rgb_camera.color_profile": camera_color_profile,
+                    "enable_depth": camera_enable_depth,
+                    "align_depth.enable": camera_align_depth,
+                    "pointcloud.enable": camera_pointcloud,
+                    "enable_sync": camera_enable_sync,
+                    "publish_tf": camera_publish_tf,
+                }.items(),
+            )
+        ],
+        scoped=True,
+        forwarding=False,
+        condition=IfCondition(camera),
+    )
+
     servo_params = {
         "moveit_servo": load_yaml(
             "easyarm_a1_moveit_config",
@@ -268,6 +305,46 @@ def generate_launch_description():
                 description="Start the EasyArm web bridge backend.",
             ),
             DeclareLaunchArgument(
+                "camera",
+                default_value="false",
+                description="Start Intel RealSense camera via realsense2_camera.",
+            ),
+            DeclareLaunchArgument(
+                "camera_enable_color",
+                default_value="true",
+                description="Enable RealSense color stream when camera:=true.",
+            ),
+            DeclareLaunchArgument(
+                "camera_enable_depth",
+                default_value="false",
+                description="Enable RealSense depth stream when camera:=true.",
+            ),
+            DeclareLaunchArgument(
+                "camera_align_depth",
+                default_value="false",
+                description="Align RealSense depth to color when camera depth is enabled.",
+            ),
+            DeclareLaunchArgument(
+                "camera_pointcloud",
+                default_value="false",
+                description="Enable RealSense point cloud when camera depth is enabled.",
+            ),
+            DeclareLaunchArgument(
+                "camera_enable_sync",
+                default_value="true",
+                description="Enable RealSense stream synchronization when camera:=true.",
+            ),
+            DeclareLaunchArgument(
+                "camera_publish_tf",
+                default_value="false",
+                description="Publish RealSense TF frames. Keep false until camera-to-base TF is calibrated.",
+            ),
+            DeclareLaunchArgument(
+                "camera_color_profile",
+                default_value="640x480x30",
+                description="RealSense color profile as width x height x fps, for example 640x480x30.",
+            ),
+            DeclareLaunchArgument(
                 "web_backend_host",
                 default_value="0.0.0.0",
                 description="Host address for the EasyArm web bridge backend.",
@@ -310,7 +387,7 @@ def generate_launch_description():
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=arm_controller_spawner,
-                    on_exit=[motion_server, servo_node, web_bridge],
+                    on_exit=[motion_server, servo_node, web_bridge, realsense_camera],
                 )
             ),
             rviz_node,

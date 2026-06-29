@@ -50,12 +50,54 @@ RViz 默认不启动。调试时可以打开：
 ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true rviz:=true
 ```
 
-## MoveIt Servo
+## RealSense Camera
 
-MoveIt Servo 默认不启动。需要测试 `SpeedJ/SpeedL` 遥操时打开：
+RealSense 默认不启动。接入相机调试视觉任务时打开：
 
 ```bash
-ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=true
+ros2 launch easyarm_a1_bringup bringup.launch.py camera:=true
+```
+
+默认只开启 color stream，color profile 为 `640x480x30`，适合先做 2D
+图像检测。如果需要更高帧率，可以改为：
+
+```bash
+ros2 launch easyarm_a1_bringup bringup.launch.py \
+  camera:=true \
+  camera_color_profile:=640x480x60
+```
+
+如果需要深度、对齐深度和点云：
+
+```bash
+ros2 launch easyarm_a1_bringup bringup.launch.py \
+  camera:=true \
+  camera_enable_depth:=true \
+  camera_align_depth:=true \
+  camera_pointcloud:=true
+```
+
+默认 `camera_publish_tf:=false`，避免未标定相机外参时 RealSense TF 和
+`base_link` 不在同一棵 TF 树里导致 MoveIt 刷 warning。完成相机到机械臂的
+静态外参后再打开：
+
+```bash
+ros2 launch easyarm_a1_bringup bringup.launch.py camera:=true camera_publish_tf:=true
+```
+
+常用检查：
+
+```bash
+ros2 topic list | grep camera
+ros2 topic echo /camera/camera/color/camera_info --once
+```
+
+## MoveIt Servo
+
+MoveIt Servo 默认启动。需要关闭时传参：
+
+```bash
+ros2 launch easyarm_a1_bringup bringup.launch.py use_mock_hardware:=true moveit_servo:=false
 ```
 
 启动后 `arm_controller` 仍保持 active，`easyarm_servo_controller` 和
