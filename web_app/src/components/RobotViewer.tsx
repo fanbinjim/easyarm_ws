@@ -3,11 +3,14 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { ColladaLoader } from "three/examples/jsm/loaders/ColladaLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { Box, Eye } from "lucide-react";
 import { api, apiAssetUrl, apiText } from "../api/client";
 import type { JointTarget, Telemetry } from "../api/types";
 import type { PoseValues } from "../ui/PoseEditor";
 
 type ViewState = "loading" | "error" | "empty" | "ready";
+type CameraMode = "perspective" | "orthographic";
+type RobotCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
 type Props = {
   token: string;
@@ -60,6 +63,11 @@ const ROS_Y = new THREE.Vector3(0, 0, -1);
 const ROS_Z = new THREE.Vector3(0, 1, 0);
 const DEFAULT_TARGET = new THREE.Vector3(0, 0.35, 0);
 const DEFAULT_CAMERA = new THREE.Vector3(1.6, 1.2, 1.6);
+const PERSPECTIVE_FOV = 45;
+const CAMERA_NEAR = 0.01;
+const CAMERA_FAR = 20;
+const ORTHOGRAPHIC_DEFAULT_HEIGHT = 2.1;
+const ROBOT_VIEWER_CANVAS_MIN_HEIGHT = 480;
 
 let _URDFLoaderModule: { default: URDFLoaderCtor } | null = null;
 
@@ -386,8 +394,53 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function orthographicHeightFromDistance(distance: number): number {
+  const fovRad = THREE.MathUtils.degToRad(PERSPECTIVE_FOV);
+  return Math.max(0.6, 2 * Math.tan(fovRad / 2) * distance);
+}
+
+function distanceFromOrthographicHeight(height: number): number {
+  const fovRad = THREE.MathUtils.degToRad(PERSPECTIVE_FOV);
+  return height / (2 * Math.tan(fovRad / 2));
+}
+
+function cameraEquivalentDistance(camera: RobotCamera, target: THREE.Vector3): number {
+  if (camera instanceof THREE.PerspectiveCamera) {
+    return camera.position.distanceTo(target) || DEFAULT_CAMERA.distanceTo(DEFAULT_TARGET);
+  }
+  const viewHeight = Number(camera.userData.viewHeight) || Math.abs(camera.top - camera.bottom) || ORTHOGRAPHIC_DEFAULT_HEIGHT;
+  return distanceFromOrthographicHeight(viewHeight / Math.max(camera.zoom, 0.001));
+}
+
+function updateRobotCameraProjection(camera: RobotCamera, width: number, height: number): void {
+  const aspect = width / height;
+  if (camera instanceof THREE.PerspectiveCamera) {
+    camera.aspect = aspect;
+  } else {
+    const viewHeight = Number(camera.userData.viewHeight) || ORTHOGRAPHIC_DEFAULT_HEIGHT;
+    const halfHeight = viewHeight / 2;
+    const halfWidth = halfHeight * aspect;
+    camera.left = -halfWidth;
+    camera.right = halfWidth;
+    camera.top = halfHeight;
+    camera.bottom = -halfHeight;
+  }
+  camera.updateProjectionMatrix();
+}
+
+function createRobotCamera(mode: CameraMode, width: number, height: number): RobotCamera {
+  const camera = mode === "perspective"
+    ? new THREE.PerspectiveCamera(PERSPECTIVE_FOV, width / height, CAMERA_NEAR, CAMERA_FAR)
+    : new THREE.OrthographicCamera(-1, 1, 1, -1, CAMERA_NEAR, CAMERA_FAR);
+  if (camera instanceof THREE.OrthographicCamera) {
+    camera.userData.viewHeight = ORTHOGRAPHIC_DEFAULT_HEIGHT;
+  }
+  updateRobotCameraProjection(camera, width, height);
+  return camera;
+}
+
 function setCameraDirection(
-  camera: THREE.PerspectiveCamera,
+  camera: RobotCamera,
   controls: OrbitControls,
   direction: THREE.Vector3,
 ): void {
@@ -400,7 +453,7 @@ function setCameraDirection(
 }
 
 function rotateCameraByDelta(
-  camera: THREE.PerspectiveCamera,
+  camera: RobotCamera,
   controls: OrbitControls,
   dx: number,
   dy: number,
@@ -480,17 +533,19 @@ function createViewCube(container: HTMLDivElement): ViewCubeState {
 export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewCubeRef = useRef<HTMLDivElement>(null);
+  const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
   const [viewState, setViewState] = useState<ViewState>("loading");
   const [errorMsg, setErrorMsg] = useState("");
   const [viewCubeHint, setViewCubeHint] = useState("");
   const [sceneVersion, setSceneVersion] = useState(0);
+  const cameraModeRef = useRef<CameraMode>("perspective");
   const sceneRef = useRef<{
     robot: URDFRobot | null;
     ghostRobot: URDFRobot | null;
     joints: Map<string, { setJointValue: (v: number) => void }>;
     ghostJoints: Map<string, { setJointValue: (v: number) => void }>;
     jointNames: string[];
-    camera: THREE.PerspectiveCamera | null;
+    camera: RobotCamera | null;
     scene: THREE.Scene | null;
     renderer: THREE.WebGLRenderer | null;
     controls: OrbitControls | null;
@@ -499,6 +554,10 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
     resizeObserver: ResizeObserver | null;
     abort: AbortController | null;
   }>({ robot: null, ghostRobot: null, joints: new Map(), ghostJoints: new Map(), jointNames: [], camera: null, scene: null, renderer: null, controls: null, viewCube: null, moveLTargetMarker: null, resizeObserver: null, abort: null });
+
+  useEffect(() => {
+    cameraModeRef.current = cameraMode;
+  }, [cameraMode]);
 
   useEffect(() => {
     let disposed = false;
@@ -513,12 +572,12 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
         if (!container || !viewCubeContainer || disposed) return;
 
         const width = container.clientWidth || 640;
-        const height = Math.max(container.clientHeight || 400, 380);
+        const height = Math.max(container.clientHeight || 400, ROBOT_VIEWER_CANVAS_MIN_HEIGHT);
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0xf5f7f6);
 
-        const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 20);
+        const camera = createRobotCamera(cameraModeRef.current, width, height);
         camera.position.copy(DEFAULT_CAMERA);
         camera.lookAt(DEFAULT_TARGET);
 
@@ -564,9 +623,8 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
 
         const resizeObserver = new ResizeObserver(() => {
           const nextWidth = container.clientWidth || 640;
-          const nextHeight = Math.max(container.clientHeight || 400, 380);
-          camera.aspect = nextWidth / nextHeight;
-          camera.updateProjectionMatrix();
+          const nextHeight = Math.max(container.clientHeight || 400, ROBOT_VIEWER_CANVAS_MIN_HEIGHT);
+          if (localScene.camera) updateRobotCameraProjection(localScene.camera, nextWidth, nextHeight);
           renderer.setSize(nextWidth, nextHeight);
         });
         resizeObserver.observe(container);
@@ -717,11 +775,13 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
 
   useEffect(() => {
     if (viewState !== "ready") return;
-    const { scene, camera, renderer, controls, viewCube } = sceneRef.current;
-    if (!scene || !camera || !renderer || !controls) return;
+    const { scene, renderer, controls, viewCube } = sceneRef.current;
+    if (!scene || !renderer || !controls) return;
     let animId = 0;
     const animate = () => {
       animId = requestAnimationFrame(animate);
+      const camera = sceneRef.current.camera;
+      if (!camera) return;
       controls.update();
       if (viewCube) {
         viewCube.group.quaternion.copy(camera.quaternion).invert();
@@ -733,6 +793,39 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
     return () => cancelAnimationFrame(animId);
   }, [viewState, sceneVersion]);
 
+  const switchCameraMode = (nextMode: CameraMode) => {
+    if (nextMode === cameraModeRef.current) return;
+    cameraModeRef.current = nextMode;
+    setCameraMode(nextMode);
+
+    const container = containerRef.current;
+    const { camera, controls } = sceneRef.current;
+    if (!container || !camera || !controls) return;
+
+    const width = container.clientWidth || 640;
+    const height = Math.max(container.clientHeight || 400, ROBOT_VIEWER_CANVAS_MIN_HEIGHT);
+    const nextCamera = createRobotCamera(nextMode, width, height);
+    const distance = cameraEquivalentDistance(camera, controls.target);
+    const direction = camera.position.clone().sub(controls.target);
+    if (direction.lengthSq() < 0.000001) {
+      direction.copy(DEFAULT_CAMERA).sub(DEFAULT_TARGET);
+    }
+    direction.normalize();
+    if (nextCamera instanceof THREE.OrthographicCamera) {
+      nextCamera.userData.viewHeight = orthographicHeightFromDistance(distance);
+      nextCamera.zoom = 1;
+      updateRobotCameraProjection(nextCamera, width, height);
+    }
+
+    nextCamera.position.copy(controls.target).add(direction.multiplyScalar(distance));
+    nextCamera.up.copy(camera.up);
+    nextCamera.lookAt(controls.target);
+    controls.object = nextCamera;
+    controls.update();
+    sceneRef.current.camera = nextCamera;
+    setSceneVersion((version) => version + 1);
+  };
+
   const resetCamera = () => {
     const camera = sceneRef.current.camera;
     if (camera) {
@@ -741,6 +834,15 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
       if (controls) {
         controls.target.copy(DEFAULT_TARGET);
         camera.lookAt(controls.target);
+        if (camera instanceof THREE.OrthographicCamera) {
+          const distance = camera.position.distanceTo(controls.target) || DEFAULT_CAMERA.distanceTo(DEFAULT_TARGET);
+          camera.userData.viewHeight = orthographicHeightFromDistance(distance);
+          camera.zoom = 1;
+          const container = containerRef.current;
+          if (container) {
+            updateRobotCameraProjection(camera, container.clientWidth || 640, Math.max(container.clientHeight || 400, ROBOT_VIEWER_CANVAS_MIN_HEIGHT));
+          }
+        }
         controls.update();
       } else {
         camera.lookAt(DEFAULT_TARGET);
@@ -802,6 +904,22 @@ export function RobotViewer({ token, telemetry, jointTarget, moveLTarget }: Prop
   return (
     <div className="robot-viewer">
       <div className="robot-viewer-canvas" ref={containerRef}>
+        <div className="camera-mode-toggle" role="group" aria-label="视图类型">
+          <button
+            type="button"
+            className={cameraMode === "perspective" ? "active" : ""}
+            onClick={() => switchCameraMode("perspective")}
+          >
+            <Eye /> 透视
+          </button>
+          <button
+            type="button"
+            className={cameraMode === "orthographic" ? "active" : ""}
+            onClick={() => switchCameraMode("orthographic")}
+          >
+            <Box /> 平行
+          </button>
+        </div>
         <div
           className="view-cube-container"
           ref={viewCubeRef}

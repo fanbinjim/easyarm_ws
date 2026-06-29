@@ -6,7 +6,6 @@ import { CanvasRenderer } from "echarts/renderers";
 import { BarChart3, Download, Maximize2, Play, RefreshCw, Square, Trash2, Upload, X } from "lucide-react";
 import { api, apiAssetUrl, ApiError, errorMessage } from "../api/client";
 import type { DebugDataPoint, DebugField, DebugLogEntry, DebugStatusResponse } from "../api/types";
-import { Panel } from "../ui/Panel";
 
 const DEBUG_FIELDS: DebugField[] = [
   "position_error",
@@ -91,6 +90,7 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [deletingLog, setDeletingLog] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
+  const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
   const [debugApiUnavailable, setDebugApiUnavailable] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -295,150 +295,161 @@ export function DebugDataPanel({ token }: DebugDataPanelProps) {
   const downloadHref = selectedLog ? apiAssetUrl(`/api/debug/logs/${encodeURIComponent(selectedLog)}/download`) : "";
 
   return (
-    <Panel title="Debug / Data Analysis" icon={<BarChart3 />} className="debug-panel">
-      {!token && (
-        <div className="debug-warning">未配置 token，已暂停 debug 请求。请先在右上角设置 token。</div>
-      )}
-      {debugApiUnavailable && (
-        <div className="debug-warning">Debug API unavailable: /api/debug/* 返回 Not Found。请确认 easyarm_web_bridge 已更新并重启。</div>
-      )}
-      {error && <div className="debug-error">{error}</div>}
+    <details className="panel stream-section debug-panel" open={open}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((value) => !value);
+        }}
+      >
+        <span><BarChart3 /> Debug / Data Analysis</span>
+        <small>Logger / Logs / Analysis</small>
+      </summary>
+      <div className="debug-panel-body">
+        {!token && (
+          <div className="debug-warning">未配置 token，已暂停 debug 请求。请先在右上角设置 token。</div>
+        )}
+        {debugApiUnavailable && (
+          <div className="debug-warning">Debug API unavailable: /api/debug/* 返回 Not Found。请确认 easyarm_web_bridge 已更新并重启。</div>
+        )}
+        {error && <div className="debug-error">{error}</div>}
 
-      <div className="debug-grid">
-        <section ref={loggerSectionRef} className="debug-section logger-section">
-          <div className="debug-section-title">Logger</div>
-          <div className="logger-summary">
-            <div className="logger-metric">
-              <span>active</span>
-              <strong>{status?.active ? "true" : "false"}</strong>
+        <div className="debug-grid">
+          <section ref={loggerSectionRef} className="debug-section logger-section">
+            <div className="debug-section-title">Logger</div>
+            <div className="logger-summary">
+              <div className="logger-metric">
+                <span>active</span>
+                <strong>{status?.active ? "true" : "false"}</strong>
+              </div>
+              <div className="logger-metric">
+                <span>written</span>
+                <strong>{status?.written_count ?? 0}</strong>
+              </div>
+              <div className="logger-metric">
+                <span>dropped</span>
+                <strong>{status?.dropped_count ?? 0}</strong>
+              </div>
+              <div className="logger-file">
+                <span>file</span>
+                <strong title={activeLogName}>{activeLogName}</strong>
+              </div>
             </div>
-            <div className="logger-metric">
-              <span>written</span>
-              <strong>{status?.written_count ?? 0}</strong>
+            <div className="debug-actions logger-actions">
+              <button disabled={!token || debugApiUnavailable || status?.active === true || Boolean(recordLoading)} onClick={() => void startRecording()}>
+                <Play /> {recordLoading === "start" ? "Starting..." : "Start"}
+              </button>
+              <button className="danger-button" disabled={!token || debugApiUnavailable || status?.active !== true || Boolean(recordLoading)} onClick={() => void stopRecording()}>
+                <Square /> {recordLoading === "stop" ? "Stopping..." : "Stop"}
+              </button>
+              <button className="ghost-button" disabled={!token || statusLoading} onClick={() => void refreshStatus()}>
+                <RefreshCw /> {statusLoading ? "Refreshing..." : "Status"}
+              </button>
             </div>
-            <div className="logger-metric">
-              <span>dropped</span>
-              <strong>{status?.dropped_count ?? 0}</strong>
-            </div>
-            <div className="logger-file">
-              <span>file</span>
-              <strong title={activeLogName}>{activeLogName}</strong>
-            </div>
-          </div>
-          <div className="debug-actions logger-actions">
-            <button disabled={!token || debugApiUnavailable || status?.active === true || Boolean(recordLoading)} onClick={() => void startRecording()}>
-              <Play /> {recordLoading === "start" ? "Starting..." : "Start"}
-            </button>
-            <button className="danger-button" disabled={!token || debugApiUnavailable || status?.active !== true || Boolean(recordLoading)} onClick={() => void stopRecording()}>
-              <Square /> {recordLoading === "stop" ? "Stopping..." : "Stop"}
-            </button>
-            <button className="ghost-button" disabled={!token || statusLoading} onClick={() => void refreshStatus()}>
-              <RefreshCw /> {statusLoading ? "Refreshing..." : "Status"}
-            </button>
-          </div>
-        </section>
+          </section>
 
-        <section className="debug-section logs-section" style={loggerSectionHeight ? { height: loggerSectionHeight } : undefined}>
-          <div className="debug-section-head">
-            <div className="debug-section-title">Logs</div>
-          </div>
-          {logs.length === 0 ? (
-            <div className="empty-hint">没有 debug bin 日志</div>
-          ) : (
-            <div className="debug-log-list">
-              {logs.map((log) => (
-                <div key={log.name} className={`debug-log-row ${selectedLog === log.name ? "active" : ""}`}>
-                  <button
-                    className="debug-log-select"
-                    onClick={() => {
-                      setSelectedLog(log.name);
-                      setChartData([]);
-                    }}
-                  >
-                    <span>{log.name}</span>
-                    <small>{formatBytes(log.size)} · {formatTime(log.mtime)}</small>
-                  </button>
-                  <button
-                    className="debug-log-delete"
-                    disabled={!token || debugApiUnavailable || Boolean(deletingLog)}
-                    title={`Delete ${log.name}`}
-                    aria-label={`Delete ${log.name}`}
-                    onClick={() => void deleteLog(log.name)}
-                  >
-                    <Trash2 />
-                  </button>
-                </div>
-              ))}
+          <section className="debug-section logs-section" style={loggerSectionHeight ? { height: loggerSectionHeight } : undefined}>
+            <div className="debug-section-head">
+              <div className="debug-section-title">Logs</div>
             </div>
-          )}
-          <div className="debug-actions logs-actions">
-            <a className={`download-link ${selectedLog ? "" : "disabled"}`} href={downloadHref} download={selectedLog || undefined}>
-              <Download /> Download bin
-            </a>
-            <button className="ghost-button upload-button" disabled={!token || debugApiUnavailable || uploadLoading} onClick={() => uploadInputRef.current?.click()}>
-              <Upload /> {uploadLoading ? "Uploading..." : "Upload bin"}
-            </button>
-            <button className="ghost-button refresh-button" disabled={!token || logsLoading} onClick={() => void refreshLogs()}>
-              <RefreshCw /> {logsLoading ? "Refreshing..." : "Refresh"}
-            </button>
-            <input
-              ref={uploadInputRef}
-              className="hidden-file-input"
-              type="file"
-              accept=".bin,application/octet-stream"
-              onChange={(event) => void uploadBin(event.currentTarget.files?.[0])}
-            />
-          </div>
-        </section>
-      </div>
-
-      <AnalysisView
-        token={token}
-        debugApiUnavailable={debugApiUnavailable}
-        selectedLogEntry={selectedLogEntry}
-        selectedJoints={selectedJoints}
-        selectedFields={selectedFields}
-        start={start}
-        end={end}
-        stride={stride}
-        dataLoading={dataLoading}
-        chartData={chartData}
-        setSelectedJoints={setSelectedJoints}
-        setSelectedFields={setSelectedFields}
-        setStart={setStart}
-        setEnd={setEnd}
-        setStride={setStride}
-        loadData={loadData}
-        onOpenFullscreen={() => setFullscreen(true)}
-      />
-
-      {fullscreen && (
-        <div className="debug-fullscreen-backdrop">
-          <div className="debug-fullscreen-panel">
-            <AnalysisView
-              token={token}
-              debugApiUnavailable={debugApiUnavailable}
-              selectedLogEntry={selectedLogEntry}
-              selectedJoints={selectedJoints}
-              selectedFields={selectedFields}
-              start={start}
-              end={end}
-              stride={stride}
-              dataLoading={dataLoading}
-              chartData={chartData}
-              setSelectedJoints={setSelectedJoints}
-              setSelectedFields={setSelectedFields}
-              setStart={setStart}
-              setEnd={setEnd}
-              setStride={setStride}
-              loadData={loadData}
-              fullscreen
-              onCloseFullscreen={() => setFullscreen(false)}
-            />
-          </div>
+            {logs.length === 0 ? (
+              <div className="empty-hint">没有 debug bin 日志</div>
+            ) : (
+              <div className="debug-log-list">
+                {logs.map((log) => (
+                  <div key={log.name} className={`debug-log-row ${selectedLog === log.name ? "active" : ""}`}>
+                    <button
+                      className="debug-log-select"
+                      onClick={() => {
+                        setSelectedLog(log.name);
+                        setChartData([]);
+                      }}
+                    >
+                      <span>{log.name}</span>
+                      <small>{formatBytes(log.size)} · {formatTime(log.mtime)}</small>
+                    </button>
+                    <button
+                      className="debug-log-delete"
+                      disabled={!token || debugApiUnavailable || Boolean(deletingLog)}
+                      title={`Delete ${log.name}`}
+                      aria-label={`Delete ${log.name}`}
+                      onClick={() => void deleteLog(log.name)}
+                    >
+                      <Trash2 />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="debug-actions logs-actions">
+              <a className={`download-link ${selectedLog ? "" : "disabled"}`} href={downloadHref} download={selectedLog || undefined}>
+                <Download /> Download bin
+              </a>
+              <button className="ghost-button upload-button" disabled={!token || debugApiUnavailable || uploadLoading} onClick={() => uploadInputRef.current?.click()}>
+                <Upload /> {uploadLoading ? "Uploading..." : "Upload bin"}
+              </button>
+              <button className="ghost-button refresh-button" disabled={!token || logsLoading} onClick={() => void refreshLogs()}>
+                <RefreshCw /> {logsLoading ? "Refreshing..." : "Refresh"}
+              </button>
+              <input
+                ref={uploadInputRef}
+                className="hidden-file-input"
+                type="file"
+                accept=".bin,application/octet-stream"
+                onChange={(event) => void uploadBin(event.currentTarget.files?.[0])}
+              />
+            </div>
+          </section>
         </div>
-      )}
-    </Panel>
+
+        <AnalysisView
+          token={token}
+          debugApiUnavailable={debugApiUnavailable}
+          selectedLogEntry={selectedLogEntry}
+          selectedJoints={selectedJoints}
+          selectedFields={selectedFields}
+          start={start}
+          end={end}
+          stride={stride}
+          dataLoading={dataLoading}
+          chartData={chartData}
+          setSelectedJoints={setSelectedJoints}
+          setSelectedFields={setSelectedFields}
+          setStart={setStart}
+          setEnd={setEnd}
+          setStride={setStride}
+          loadData={loadData}
+          onOpenFullscreen={() => setFullscreen(true)}
+        />
+
+        {fullscreen && (
+          <div className="debug-fullscreen-backdrop">
+            <div className="debug-fullscreen-panel">
+              <AnalysisView
+                token={token}
+                debugApiUnavailable={debugApiUnavailable}
+                selectedLogEntry={selectedLogEntry}
+                selectedJoints={selectedJoints}
+                selectedFields={selectedFields}
+                start={start}
+                end={end}
+                stride={stride}
+                dataLoading={dataLoading}
+                chartData={chartData}
+                setSelectedJoints={setSelectedJoints}
+                setSelectedFields={setSelectedFields}
+                setStart={setStart}
+                setEnd={setEnd}
+                setStride={setStride}
+                loadData={loadData}
+                fullscreen
+                onCloseFullscreen={() => setFullscreen(false)}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 

@@ -271,6 +271,7 @@ function AppInner() {
           />
           <StreamPanel pose={apiState.pose} />
           <DebugDataPanel token={settings.token} />
+          <RosLog telemetry={telemetry.data} />
         </div>
 
         <aside className="workspace-side">
@@ -280,8 +281,6 @@ function AppInner() {
           <ControllerList controllers={apiState.controllers} />
         </aside>
       </section>
-
-      <RosLog telemetry={telemetry.data} />
 
       {confirm && <ConfirmDialog dialog={confirm} onClose={closeConfirm} />}
       {settings.open && (

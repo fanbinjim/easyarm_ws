@@ -28,7 +28,12 @@ export function StreamPanel({ open: defaultOpen = false, pose }: { open?: boolea
 
   return (
     <details className="panel stream-section" open={open}>
-      <summary onClick={() => setOpen(!open)}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((value) => !value);
+        }}
+      >
         <span><Gauge /> 流式控制</span>
         <small>Speed / Servo 按住发送，松开 Halt</small>
       </summary>

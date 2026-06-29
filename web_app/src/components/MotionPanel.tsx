@@ -52,7 +52,7 @@ export function MotionPanel({
   const [moveJValues, setMoveJValues] = useState(DEFAULT_MOVEJ);
   const [moveLValues, setMoveLValues] = useState({ x: 0.25, y: 0, z: 0.25, qx: 0, qy: 0, qz: 0, qw: 1 });
   const [selectedNamed, setSelectedNamed] = useState("");
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const namedStatesList = namedStates?.states ?? [];
   const activeNamedValues = useMemo(
@@ -85,6 +85,14 @@ export function MotionPanel({
       setSelectedNamed(namedStatesList[0].name);
     }
   }, [namedStatesList, selectedNamed]);
+
+  const toggleOpen = () => {
+    const nextOpen = !open;
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      onPlanOnlyChange(true);
+    }
+  };
 
   const tabContent: Record<MotionTab, ReactNode> = {
     movej: (
@@ -125,7 +133,12 @@ export function MotionPanel({
 
   return (
     <details className="panel stream-section control-console" open={open}>
-      <summary onClick={() => setOpen(!open)}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          toggleOpen();
+        }}
+      >
         <span><Gauge /> 运动控制台</span>
         <small>{planOnly ? "规划模式，不下发真实运动" : "执行模式，会下发真实运动"}</small>
       </summary>
