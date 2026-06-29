@@ -147,6 +147,30 @@ SERVO:
 
 如果现有 forward controllers 无法满足 `position + velocity` 同时下发，则后续考虑新增 EasyArm 自定义 streaming controller。
 
+## Startup Safety Risks
+
+### 上电反馈同步竞态
+
+当前 `easyarm_hardware::on_activate()` 中已有“读取当前电机位置并同步为目标命令”的逻辑：
+
+```text
+enable motors in damping mode
+  -> read()
+  -> sync_states_to_commands()
+```
+
+但该逻辑依赖 `read()` 当时已经从 `RobstrideCanDriver` 收到每个电机的有效反馈。如果启动时某些电机第一帧反馈尚未到达，`feedback.is_valid == false` 时 `hw_positions_` 会保留初始化值；当前 `initial_positions.yaml` 默认为全 0，因此 `sync_states_to_commands()` 可能把 0 同步成 position command。表现上可能像“上电后自动往 home/零位拉”。重新上电后问题可能消失，因为电机/CAN 反馈已经稳定，缓存更快变为有效。
+
+该风险与前端无关；`web:=false` 启动时仍可能出现。它属于硬件 activation 时序和反馈有效性检查问题。
+
+后续修复方向：
+
+- 在 hardware activation 阶段等待所有关节 fresh feedback 后再执行 `sync_states_to_commands()`。
+- 如果超时未收到完整反馈，保持阻尼/IDLE 或直接 activation 失败，禁止进入 POSITION hold。
+- 增加启动反馈合理性检查：上电后如果读到的电机位置全部是绝对 0，应视为高风险无效读数。真实电机反馈通常会有微小抖动或非零小数，不应所有关节严格等于 0；该判断可作为 `feedback.is_valid` / fresh feedback 检查之外的额外保护。
+- 在同步成功时打印各关节启动反馈位置和 command position，便于现场判断同步到的是当前位姿还是初始化值。
+- 评估 bringup 默认是否应先加载但不激活 `arm_controller`，待 joint state 稳定后再显式进入 MOVE/POSITION。
+
 ## Motion Server Direction
 
 `easyarm_motion_server` 后续应成为 EasyArm 运动能力的统一服务层。

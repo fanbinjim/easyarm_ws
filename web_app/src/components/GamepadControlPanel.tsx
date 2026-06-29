@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as THREE from "three";
 import { Gamepad2, Pause, RefreshCw } from "lucide-react";
 import type { PoseResponse, StreamCommand } from "../api/types";
 import type { PoseValues } from "../ui/PoseEditor";
@@ -30,16 +31,25 @@ const BUTTON_START = 9;
 const DPAD_UP = 12;
 const DPAD_DOWN = 13;
 
+/**
+ * 对摇杆输入做死区和平方曲线映射，降低零点漂移和低速抖动。
+ */
 function applyDeadzone(value: number): number {
   if (Math.abs(value) < DEADZONE) return 0;
   const normalized = (Math.abs(value) - DEADZONE) / (1 - DEADZONE);
   return Math.sign(value) * normalized * normalized;
 }
 
+/**
+ * 安全读取指定手柄按钮状态，手柄未连接或按钮不存在时返回 false。
+ */
 function pressed(gamepad: Gamepad | null, index: number): boolean {
   return Boolean(gamepad?.buttons[index]?.pressed);
 }
 
+/**
+ * 将后端末端位姿响应转换为前端 MoveL/ServoL 使用的扁平结构。
+ */
 function poseToValues(pose: PoseResponse | null): PoseValues | null {
   if (!pose) return null;
   return {
@@ -53,42 +63,34 @@ function poseToValues(pose: PoseResponse | null): PoseValues | null {
   };
 }
 
-function normalizeQuaternion(pose: PoseValues): PoseValues {
-  const norm = Math.hypot(pose.qx, pose.qy, pose.qz, pose.qw) || 1;
+/**
+ * 将手柄角速度积分到 ServoL 目标姿态，返回新的目标位姿。
+ *
+ * `orientation.multiply(delta)` 保持当前语义为 target * delta，即在当前目标姿态上继续叠加增量旋转。
+ */
+function integratePoseOrientation(pose: PoseValues, wx: number, wy: number, wz: number, dt: number): PoseValues {
+  const orientation = new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw);
+  const angle = Math.hypot(wx, wy, wz) * dt;
+
+  if (angle >= 1e-9) {
+    const axis = new THREE.Vector3(wx, wy, wz).normalize();
+    const delta = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+    orientation.multiply(delta);
+  }
+
+  orientation.normalize();
   return {
     ...pose,
-    qx: pose.qx / norm,
-    qy: pose.qy / norm,
-    qz: pose.qz / norm,
-    qw: pose.qw / norm,
+    qx: orientation.x,
+    qy: orientation.y,
+    qz: orientation.z,
+    qw: orientation.w,
   };
 }
 
-function multiplyQuaternion(
-  a: Pick<PoseValues, "qx" | "qy" | "qz" | "qw">,
-  b: Pick<PoseValues, "qx" | "qy" | "qz" | "qw">,
-) {
-  return {
-    qx: a.qw * b.qx + a.qx * b.qw + a.qy * b.qz - a.qz * b.qy,
-    qy: a.qw * b.qy - a.qx * b.qz + a.qy * b.qw + a.qz * b.qx,
-    qz: a.qw * b.qz + a.qx * b.qy - a.qy * b.qx + a.qz * b.qw,
-    qw: a.qw * b.qw - a.qx * b.qx - a.qy * b.qy - a.qz * b.qz,
-  };
-}
-
-function deltaQuaternion(wx: number, wy: number, wz: number, dt: number) {
-  const angle = Math.hypot(wx, wy, wz) * dt;
-  if (angle < 1e-9) return { qx: 0, qy: 0, qz: 0, qw: 1 };
-  const half = angle / 2;
-  const scale = Math.sin(half) / Math.hypot(wx, wy, wz);
-  return {
-    qx: wx * scale,
-    qy: wy * scale,
-    qz: wz * scale,
-    qw: Math.cos(half),
-  };
-}
-
+/**
+ * 按当前 Xbox 手柄映射生成笛卡尔速度指令：[vx, vy, vz, wx, wy, wz]。
+ */
 function buildTwist(gamepad: Gamepad, scale: number): number[] {
   const axes = gamepad.axes;
   const vx = applyDeadzone(axes[0] ?? 0) * BASE_LINEAR_SPEED * scale;
@@ -107,6 +109,9 @@ function buildTwist(gamepad: Gamepad, scale: number): number[] {
   ];
 }
 
+/**
+ * Xbox 手柄控制面板，支持 SpeedL 速度控制和 ServoL 速度积分到目标位姿。
+ */
 export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
   const [enabled, setEnabled] = useState(false);
   const [mode, setMode] = useState<GamepadMode>("speedl");
@@ -121,18 +126,21 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
   const gamepadNameRef = useRef(gamepadName);
   const scaleLabelRef = useRef(scaleLabel);
 
+  // 避免 30Hz 控制循环反复写入相同状态导致 React 重渲染。
   const updateStatus = useCallback((next: string) => {
     if (statusRef.current === next) return;
     statusRef.current = next;
     setStatus(next);
   }, []);
 
+  // 只在手柄设备名变化时更新 UI。
   const updateGamepadName = useCallback((next: string) => {
     if (gamepadNameRef.current === next) return;
     gamepadNameRef.current = next;
     setGamepadName(next);
   }, []);
 
+  // 只在倍率标签变化时更新 UI，保持发送循环轻量。
   const updateScaleLabel = useCallback((next: string) => {
     if (scaleLabelRef.current === next) return;
     scaleLabelRef.current = next;
@@ -143,12 +151,14 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
     latestPoseRef.current = pose;
   }, [pose]);
 
+  // 将 ServoL 的积分目标重置为机器人当前末端位姿。
   const syncServoLTarget = useCallback(() => {
     const current = poseToValues(latestPoseRef.current);
     targetPoseRef.current = current;
     updateStatus(current ? "ServoL target 已同步当前位姿" : "当前末端位姿不可用");
   }, [updateStatus]);
 
+  // 统一发送 halt，并用 ref 避免重复发送 halt。
   const halt = useCallback(() => {
     if (haltedRef.current) return;
     onHalt();
@@ -164,6 +174,7 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
 
     let timer: ReturnType<typeof window.setInterval> | null = null;
 
+    // 固定 30Hz 读取手柄并发送控制指令，让前后端命令节奏稳定。
     const tick = () => {
       const gamepads = navigator.getGamepads?.() ?? [];
       const gamepad = Array.from(gamepads).find(Boolean) ?? null;
@@ -213,9 +224,7 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
           target.x += twist[0] * SEND_DT_SEC;
           target.y += twist[1] * SEND_DT_SEC;
           target.z += twist[2] * SEND_DT_SEC;
-          const delta = deltaQuaternion(twist[3], twist[4], twist[5], SEND_DT_SEC);
-          const rotated = multiplyQuaternion(target, delta);
-          targetPoseRef.current = normalizeQuaternion({ ...target, ...rotated });
+          targetPoseRef.current = integratePoseOrientation(target, twist[3], twist[4], twist[5], SEND_DT_SEC);
           onSend({ type: "servol", ...targetPoseRef.current, frame_id: "base_link" });
           updateStatus("ServoL sending");
         }
@@ -233,6 +242,7 @@ export function GamepadControlPanel({ pose, onSend, onHalt }: Props) {
     };
   }, [enabled, halt, mode, onSend, syncServoLTarget, updateGamepadName, updateScaleLabel, updateStatus]);
 
+  // 页面失焦或切到后台时停止流式控制，避免后台继续下发运动指令。
   useEffect(() => {
     const handleBlur = () => halt();
     const handleVisibility = () => {

@@ -11,7 +11,7 @@ namespace easyarm_motion_server
 struct MotionContext
 {
   std::string planning_group{"arm"};
-  std::string ee_link{"Link6"};
+  std::string ee_link{"tcp"};
   std::string planning_frame{"base_link"};
   double default_velocity_scale{1.0};
   double default_acceleration_scale{1.0};

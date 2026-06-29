@@ -28,4 +28,29 @@
     <parent link="Link6" />
     <child link="flange" />
   </joint>
+  <link name="tool2">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://easyarm_description/meshes/tools/ASS_Tool_2.stl"/>
+      </geometry>
+      <material name="tool_gray">
+        <color rgba="0.45 0.45 0.45 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="flange_to_tool2" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="flange"/>
+    <child link="tool2"/>
+  </joint>
+
+  <link name="tcp"/>
+
+  <joint name="flange_to_tcp" type="fixed">
+    <origin xyz="0 0 0.04" rpy="0 0 0"/>
+    <parent link="flange"/>
+    <child link="tcp"/>
+  </joint>
 </robot>
