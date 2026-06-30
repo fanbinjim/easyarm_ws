@@ -16,6 +16,7 @@
 
 import argparse
 from collections import deque
+import math
 from pathlib import Path
 import threading
 import time
@@ -34,6 +35,7 @@ from .ball_balance_detector import clamp
 from .ball_balance_detector import detect_objects
 from .ball_balance_detector import PlateCandidateDebug
 from .ball_balance_motion import BallBalanceMotionController
+from .ball_balance_motion import compensate_offset
 from .ball_balance_motion import MotionConfig
 
 
@@ -114,6 +116,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tilt degrees per normalized ball offset.",
     )
     parser.add_argument(
+        "--balance-angle-d-gain-deg",
+        type=float,
+        default=2.0,
+        help="Tilt degrees per normalized ball offset velocity.",
+    )
+    parser.add_argument(
+        "--camera-to-plate-yaw-deg",
+        type=float,
+        default=-8.0,
+        help=(
+            "Yaw rotation from image offset frame to plate/TCP frame. "
+            "Positive values rotate image offset counterclockwise."
+        ),
+    )
+    parser.add_argument(
+        "--balance-filter-alpha",
+        type=float,
+        default=0.35,
+        help="Low-pass alpha for ServoL visual offset filtering.",
+    )
+    parser.add_argument(
+        "--balance-max-measurement-age-sec",
+        type=float,
+        default=0.2,
+        help="Maximum visual measurement age before ServoL commands origin.",
+    )
+    parser.add_argument(
         "--motion-velocity-scale",
         type=float,
         default=0.1,
@@ -124,6 +153,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.1,
         help="Acceleration scale for pose1 and MoveL commands.",
+    )
+    parser.add_argument(
+        "--servol-rate-hz",
+        type=float,
+        default=200.0,
+        help=(
+            "ServoL target publish rate when O key starts "
+            "continuous control."
+        ),
     )
     parser.add_argument(
         "--plate-min-radius",
@@ -254,8 +292,13 @@ def motion_config_from_args(args: argparse.Namespace) -> MotionConfig:
         source_frame=args.motion_source_frame,
         angle_limit_deg=args.balance_angle_limit_deg,
         angle_gain_deg=args.balance_angle_gain_deg,
+        angle_derivative_gain_deg=args.balance_angle_d_gain_deg,
+        camera_to_plate_yaw_deg=args.camera_to_plate_yaw_deg,
+        filter_alpha=args.balance_filter_alpha,
+        max_measurement_age_sec=args.balance_max_measurement_age_sec,
         velocity_scale=args.motion_velocity_scale,
         acceleration_scale=args.motion_acceleration_scale,
+        servol_rate_hz=args.servol_rate_hz,
     )
 
 
@@ -413,6 +456,7 @@ def draw_detection(
     frame: np.ndarray,
     detection: BallBalanceDetection,
     config: DetectionConfig,
+    camera_to_plate_yaw_deg: float,
 ) -> None:
     """Draw plate and ball detections on the frame."""
     draw_plate_roi(frame, config)
@@ -440,6 +484,103 @@ def draw_detection(
             markerSize=12,
             thickness=2,
         )
+        draw_yaw_compensation_overlay(
+            frame,
+            detection,
+            camera_to_plate_yaw_deg,
+        )
+
+
+def draw_yaw_compensation_overlay(
+    frame: np.ndarray,
+    detection: BallBalanceDetection,
+    camera_to_plate_yaw_deg: float,
+) -> None:
+    """Draw raw and yaw-compensated offset vectors on the preview."""
+    if (
+        detection.plate is None
+        or detection.ball is None
+        or detection.offset is None
+    ):
+        return
+
+    plate_center = detection.plate.center
+    radius = detection.plate.radius
+    compensated_offset = compensate_offset(
+        detection.offset,
+        camera_to_plate_yaw_deg,
+    )
+    raw_endpoint = offset_to_image_point(plate_center, radius,
+                                         detection.offset)
+    compensated_endpoint = offset_to_image_point(
+        plate_center,
+        radius,
+        compensated_offset,
+    )
+    center = round_point(plate_center)
+    raw_point = round_point(raw_endpoint)
+    compensated_point = round_point(compensated_endpoint)
+
+    draw_arrow(frame, center, raw_point, (0, 220, 220), "raw")
+    draw_arrow(frame, center, compensated_point, (255, 220, 40), "plate")
+    draw_plate_axes(frame, plate_center, radius, camera_to_plate_yaw_deg)
+
+
+def draw_plate_axes(
+    frame: np.ndarray,
+    center: tuple[float, float],
+    radius: float,
+    camera_to_plate_yaw_deg: float,
+) -> None:
+    """Draw the compensated plate coordinate axes in image coordinates."""
+    axis_length = max(35.0, radius * 0.55)
+    yaw = math.radians(camera_to_plate_yaw_deg)
+    x_axis = (math.cos(yaw), math.sin(yaw))
+    y_axis = (-math.sin(yaw), math.cos(yaw))
+    center_point = round_point(center)
+    x_end = round_point((
+        center[0] + x_axis[0] * axis_length,
+        center[1] + x_axis[1] * axis_length,
+    ))
+    y_end = round_point((
+        center[0] + y_axis[0] * axis_length,
+        center[1] + y_axis[1] * axis_length,
+    ))
+    draw_arrow(frame, center_point, x_end, (255, 120, 40), "plate x")
+    draw_arrow(frame, center_point, y_end, (40, 170, 255), "plate y")
+
+
+def draw_arrow(
+    frame: np.ndarray,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    color: tuple[int, int, int],
+    label: str,
+) -> None:
+    """Draw one labelled arrow."""
+    cv2.arrowedLine(frame, start, end, color, 2, cv2.LINE_AA, tipLength=0.18)
+    cv2.putText(
+        frame,
+        label,
+        (end[0] + 6, end[1] - 6),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.42,
+        color,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def offset_to_image_point(
+    center: tuple[float, float],
+    radius: float,
+    offset: tuple[float, float],
+) -> tuple[float, float]:
+    """Convert a normalized plate offset to an image-space point."""
+    return (
+        center[0] + offset[0] * radius,
+        center[1] + offset[1] * radius,
+    )
 
 
 def draw_circle_detection(
@@ -487,6 +628,7 @@ def build_status_lines(
     stamp,
     detection: BallBalanceDetection,
     motion: BallBalanceMotionController,
+    camera_to_plate_yaw_deg: float,
 ) -> list[str]:
     """Build the text lines displayed in the preview."""
     stamp_text = (
@@ -509,7 +651,15 @@ def build_status_lines(
         lines.append("ball: not found")
     elif detection.offset is not None:
         dx, dy = detection.offset
-        lines.append(f"offset: x={dx:+.3f}, y={dy:+.3f}")
+        plate_dx, plate_dy = compensate_offset(
+            detection.offset,
+            camera_to_plate_yaw_deg,
+        )
+        lines.append(f"raw offset: x={dx:+.3f}, y={dy:+.3f}")
+        lines.append(
+            f"plate offset: x={plate_dx:+.3f}, y={plate_dy:+.3f}, "
+            f"yaw={camera_to_plate_yaw_deg:+.1f}deg"
+        )
     lines.extend(motion.status_lines())
     return lines
 
@@ -676,6 +826,7 @@ def run_preview(node: BallBalanceNode) -> int:
     cv2.namedWindow(node.window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(node.window_name, node.display_width, node.display_height)
     node.get_logger().info("Press q or Esc in the preview window to exit.")
+    last_measurement_frame_count = 0
 
     while rclpy.ok():
         rclpy.spin_once(node, timeout_sec=0.01)
@@ -695,8 +846,16 @@ def run_preview(node: BallBalanceNode) -> int:
             node.display_height,
         )
         detection = detect_objects(preview, node.detector_config)
-        draw_detection(preview, detection, node.detector_config)
+        draw_detection(
+            preview,
+            detection,
+            node.detector_config,
+            node.motion.config.camera_to_plate_yaw_deg,
+        )
         set_last_preview_frame(preview)
+        if frame_count != last_measurement_frame_count:
+            node.motion.update_measurement(detection.offset)
+            last_measurement_frame_count = frame_count
         status_lines = build_status_lines(
             frame_count,
             fps,
@@ -704,6 +863,7 @@ def run_preview(node: BallBalanceNode) -> int:
             stamp,
             detection,
             node.motion,
+            node.motion.config.camera_to_plate_yaw_deg,
         )
         draw_text_lines(preview, status_lines, (14, 28))
         cv2.imshow(node.window_name, preview)
@@ -730,6 +890,10 @@ def handle_key(
     elif key in (ord("b"), ord("B")):
         offset = None if detection is None else detection.offset
         node.motion.send_balance_step(offset)
+    elif key in (ord("o"), ord("O")):
+        node.motion.start_servol()
+    elif key in (ord("p"), ord("P")):
+        node.motion.stop_servol()
     else:
         handle_capture_key(node, key)
 
@@ -770,6 +934,12 @@ def main() -> int:
         raise SystemExit("--width and --height must be positive")
     if args.ball_plate_inner_scale <= 0.0:
         raise SystemExit("--ball-plate-inner-scale must be positive")
+    if args.servol_rate_hz <= 0.0:
+        raise SystemExit("--servol-rate-hz must be positive")
+    if not 0.0 < args.balance_filter_alpha <= 1.0:
+        raise SystemExit("--balance-filter-alpha must be in (0, 1]")
+    if args.balance_max_measurement_age_sec <= 0.0:
+        raise SystemExit("--balance-max-measurement-age-sec must be positive")
 
     rclpy.init()
     node = BallBalanceNode(args)
@@ -778,6 +948,7 @@ def main() -> int:
     except KeyboardInterrupt:
         return 0
     finally:
+        node.motion.shutdown()
         cv2.destroyAllWindows()
         node.destroy_node()
         rclpy.shutdown()

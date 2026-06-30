@@ -16,6 +16,8 @@
 
 from dataclasses import dataclass
 import math
+import threading
+import time
 
 from easyarm_interfaces.action import MoveL
 from easyarm_interfaces.action import MoveNamedState
@@ -27,19 +29,24 @@ from rclpy.node import Node
 
 @dataclass(frozen=True)
 class MotionConfig:
-    """Configuration for one-shot ball-balance motion commands."""
+    """Configuration for ball-balance motion commands."""
 
     named_state: str
     frame_id: str
     source_frame: str
     angle_limit_deg: float
     angle_gain_deg: float
+    angle_derivative_gain_deg: float
+    camera_to_plate_yaw_deg: float
+    filter_alpha: float
+    max_measurement_age_sec: float
     velocity_scale: float
     acceleration_scale: float
+    servol_rate_hz: float
 
 
 class BallBalanceMotionController:
-    """Send pose1 and one-shot MoveL balance commands."""
+    """Send pose1, one-shot MoveL, and continuous ServoL commands."""
 
     def __init__(self, node: Node, config: MotionConfig) -> None:
         """Create action and service clients."""
@@ -52,31 +59,79 @@ class BallBalanceMotionController:
         )
         self.movel_client = ActionClient(node, MoveL, "/easyarm/movel")
         self.get_pose_client = node.create_client(GetPose, "/easyarm/get_pose")
+        self.servol_pub = node.create_publisher(
+            PoseStamped,
+            "/easyarm/servol_cmd",
+            10,
+        )
         self.origin_pose = None
         self.busy = False
         self.active_command = ""
-        self.status = "Space: pose1, B: one MoveL balance step"
+        self.servol_active = False
+        self.servol_return_samples = 0
+        self.state_lock = threading.Lock()
+        self.shutdown_event = threading.Event()
+        self.filtered_offset: tuple[float, float] | None = None
+        self.filtered_velocity: tuple[float, float] = (0.0, 0.0)
+        self.last_measurement_time: float | None = None
+        self.status = "Space: pose1, B: MoveL step, O/P: ServoL run/stop"
         self.last_tilt_x_deg = 0.0
         self.last_tilt_y_deg = 0.0
         self.last_command_sent = False
+        self.servol_thread = threading.Thread(
+            target=self._servol_loop,
+            name="easyarm_ball_balance_servol",
+            daemon=True,
+        )
+        self.servol_thread.start()
 
     def status_lines(self) -> list[str]:
         """Return short status lines for the camera preview."""
-        origin = "set" if self.origin_pose is not None else "not set"
+        with self.state_lock:
+            origin = "set" if self.origin_pose is not None else "not set"
+            servol_active = self.servol_active
+            last_command_sent = self.last_command_sent
+            tilt_x_deg = self.last_tilt_x_deg
+            tilt_y_deg = self.last_tilt_y_deg
+            filtered_offset = self.filtered_offset
+            filtered_velocity = self.filtered_velocity
+            last_measurement_time = self.last_measurement_time
         lines = [
             f"origin: {origin}",
             f"motion: {self.status}",
         ]
-        if self.last_command_sent:
+        if last_command_sent:
             lines.append(
                 "tilt cmd: "
-                f"x={self.last_tilt_x_deg:+.2f}deg "
-                f"y={self.last_tilt_y_deg:+.2f}deg"
+                f"x={tilt_x_deg:+.2f}deg "
+                f"y={tilt_y_deg:+.2f}deg"
             )
+        if filtered_offset is not None and last_measurement_time is not None:
+            age = max(0.0, time.monotonic() - last_measurement_time)
+            lines.append(
+                "pd state: "
+                f"x={filtered_offset[0]:+.3f} "
+                f"y={filtered_offset[1]:+.3f} "
+                f"vx={filtered_velocity[0]:+.2f} "
+                f"vy={filtered_velocity[1]:+.2f}"
+            )
+            lines.append(f"measurement age: {age:.2f}s")
+        state = "active" if servol_active else "stopped"
+        lines.append(f"servol: {state} {self.config.servol_rate_hz:.0f}Hz")
         return lines
+
+    def shutdown(self) -> None:
+        """Stop the ServoL worker thread."""
+        with self.state_lock:
+            self.servol_active = False
+            self.servol_return_samples = 0
+        self.shutdown_event.set()
+        if self.servol_thread.is_alive():
+            self.servol_thread.join(timeout=1.0)
 
     def move_to_named_state(self) -> None:
         """Send the configured named-state action."""
+        self._disable_servol()
         if self.busy:
             self._set_status(f"busy: {self.active_command}")
             return
@@ -100,10 +155,15 @@ class BallBalanceMotionController:
 
     def send_balance_step(self, offset: tuple[float, float] | None) -> None:
         """Send one MoveL command using the latest normalized ball offset."""
+        if self._is_servol_active():
+            self._set_status("stop ServoL before one-shot MoveL")
+            return
         if self.busy:
             self._set_status(f"busy: {self.active_command}")
             return
-        if self.origin_pose is None:
+        with self.state_lock:
+            origin_pose = self.origin_pose
+        if origin_pose is None:
             self._set_status("press Space to set pose1 origin first")
             return
         if offset is None:
@@ -113,9 +173,21 @@ class BallBalanceMotionController:
             self._set_status("/easyarm/movel not ready")
             return
 
-        tilt_x_deg, tilt_y_deg = balance_tilt_from_offset(offset, self.config)
+        compensated_offset = compensate_offset(
+            offset,
+            self.config.camera_to_plate_yaw_deg,
+        )
+        tilt_x_deg, tilt_y_deg = balance_tilt_from_offset(
+            compensated_offset,
+            self.config,
+        )
+        with self.state_lock:
+            origin_pose = self.origin_pose
+        if origin_pose is None:
+            self._set_status("origin pose lost")
+            return
         target_pose = make_balance_target_pose(
-            self.origin_pose,
+            origin_pose,
             self.config.frame_id,
             tilt_x_deg,
             tilt_y_deg,
@@ -126,9 +198,10 @@ class BallBalanceMotionController:
         goal.acceleration_scale = self.config.acceleration_scale
         goal.execute = True
 
-        self.last_tilt_x_deg = tilt_x_deg
-        self.last_tilt_y_deg = tilt_y_deg
-        self.last_command_sent = True
+        with self.state_lock:
+            self.last_tilt_x_deg = tilt_x_deg
+            self.last_tilt_y_deg = tilt_y_deg
+            self.last_command_sent = True
         self.busy = True
         self.active_command = "MoveL"
         self._set_status(
@@ -139,6 +212,97 @@ class BallBalanceMotionController:
             feedback_callback=self._on_action_feedback,
         )
         future.add_done_callback(self._on_movel_goal_response)
+
+    def start_servol(self) -> None:
+        """Start continuous ServoL balance control."""
+        if self.busy:
+            self._set_status(f"busy: {self.active_command}")
+            return
+        with self.state_lock:
+            origin_pose = self.origin_pose
+        if origin_pose is None:
+            self._set_status("press Space to set pose1 origin first")
+            return
+        with self.state_lock:
+            has_measurement = self.filtered_offset is not None
+        if not has_measurement:
+            self._set_status("no visual offset for ServoL")
+            return
+        if self.servol_pub.get_subscription_count() <= 0:
+            self._set_status("/easyarm/servol_cmd has no subscriber")
+            return
+        with self.state_lock:
+            self.servol_active = True
+            self.servol_return_samples = 0
+        self._set_status("ServoL balance running")
+
+    def stop_servol(self) -> None:
+        """Stop ServoL and publish origin orientation briefly."""
+        with self.state_lock:
+            origin_pose = self.origin_pose
+        if origin_pose is None:
+            with self.state_lock:
+                self.servol_active = False
+            self._set_status("ServoL stopped")
+            return
+        return_samples = max(1, int(round(self.config.servol_rate_hz * 0.1)))
+        with self.state_lock:
+            self.servol_active = False
+            self.servol_return_samples = return_samples
+            self.last_tilt_x_deg = 0.0
+            self.last_tilt_y_deg = 0.0
+            self.last_command_sent = True
+        self._set_status("ServoL stopping, returning origin attitude")
+
+    def compensated_offset(
+        self,
+        offset: tuple[float, float],
+    ) -> tuple[float, float]:
+        """Rotate an image-space offset into the plate/TCP frame."""
+        return compensate_offset(offset, self.config.camera_to_plate_yaw_deg)
+
+    def update_measurement(self, offset: tuple[float, float] | None) -> None:
+        """Low-pass filter ball offset and estimate normalized velocity."""
+        if offset is None:
+            return
+        offset_x, offset_y = self.compensated_offset(offset)
+        now = time.monotonic()
+        alpha = clamp(self.config.filter_alpha, 0.0, 1.0)
+        with self.state_lock:
+            if (
+                self.filtered_offset is None
+                or self.last_measurement_time is None
+            ):
+                self.filtered_offset = (offset_x, offset_y)
+                self.filtered_velocity = (0.0, 0.0)
+                self.last_measurement_time = now
+                return
+
+            dt = now - self.last_measurement_time
+            if dt <= 1.0e-4 or dt > 0.5:
+                self.filtered_offset = (offset_x, offset_y)
+                self.filtered_velocity = (0.0, 0.0)
+                self.last_measurement_time = now
+                return
+
+            previous_offset = self.filtered_offset
+            filtered_offset = (
+                previous_offset[0] + alpha * (offset_x - previous_offset[0]),
+                previous_offset[1] + alpha * (offset_y - previous_offset[1]),
+            )
+            measured_velocity = (
+                (filtered_offset[0] - previous_offset[0]) / dt,
+                (filtered_offset[1] - previous_offset[1]) / dt,
+            )
+            previous_velocity = self.filtered_velocity
+            self.filtered_velocity = (
+                previous_velocity[0]
+                + alpha * (measured_velocity[0] - previous_velocity[0]),
+                previous_velocity[1]
+                + alpha * (measured_velocity[1] - previous_velocity[1]),
+            )
+            self.filtered_offset = filtered_offset
+            self.last_measurement_time = now
 
     def request_origin_pose(self) -> None:
         """Read the current TCP pose and store it as the balance origin."""
@@ -151,6 +315,7 @@ class BallBalanceMotionController:
         request.source_frame = self.config.source_frame
         self.busy = True
         self.active_command = "GetPose"
+        self._disable_servol()
         self._set_status("reading origin pose")
         future = self.get_pose_client.call_async(request)
         future.add_done_callback(self._on_origin_pose_response)
@@ -221,7 +386,8 @@ class BallBalanceMotionController:
             message = "" if response is None else response.message
             self._finish_with_error(f"get pose failed: {message}")
             return
-        self.origin_pose = response.pose
+        with self.state_lock:
+            self.origin_pose = response.pose
         pose = response.pose.pose
         position = pose.position
         self._finish_ok(
@@ -255,6 +421,82 @@ class BallBalanceMotionController:
         else:
             self.node.get_logger().info(status)
 
+    def _servol_loop(self) -> None:
+        """Publish ServoL targets at the configured fixed rate."""
+        rate = max(self.config.servol_rate_hz, 1.0)
+        interval = 1.0 / rate
+        next_tick = time.monotonic()
+        while not self.shutdown_event.is_set():
+            command = self._build_servol_command()
+            if command is not None:
+                self.servol_pub.publish(command)
+
+            next_tick += interval
+            delay = next_tick - time.monotonic()
+            if delay <= 0.0:
+                next_tick = time.monotonic()
+                delay = interval
+            self.shutdown_event.wait(delay)
+
+    def _build_servol_command(self) -> PoseStamped | None:
+        """Build one ServoL pose from the latest filtered PD state."""
+        now = time.monotonic()
+        with self.state_lock:
+            origin_pose = self.origin_pose
+            if origin_pose is None:
+                return None
+
+            if self.servol_active:
+                offset = self.filtered_offset
+                velocity = self.filtered_velocity
+                measurement_time = self.last_measurement_time
+                measurement_stale = (
+                    offset is None
+                    or measurement_time is None
+                    or now - measurement_time
+                    > self.config.max_measurement_age_sec
+                )
+                if measurement_stale:
+                    tilt_x_deg = 0.0
+                    tilt_y_deg = 0.0
+                else:
+                    tilt_x_deg, tilt_y_deg = balance_tilt_from_pd(
+                        offset,
+                        velocity,
+                        self.config,
+                    )
+            elif self.servol_return_samples > 0:
+                tilt_x_deg = 0.0
+                tilt_y_deg = 0.0
+                self.servol_return_samples -= 1
+            else:
+                return None
+
+            self.last_tilt_x_deg = tilt_x_deg
+            self.last_tilt_y_deg = tilt_y_deg
+            self.last_command_sent = True
+            frame_id = self.config.frame_id
+
+        target_pose = make_balance_target_pose(
+            origin_pose,
+            frame_id,
+            tilt_x_deg,
+            tilt_y_deg,
+        )
+        target_pose.header.stamp = self.node.get_clock().now().to_msg()
+        return target_pose
+
+    def _disable_servol(self) -> None:
+        """Disable continuous ServoL publishing without return samples."""
+        with self.state_lock:
+            self.servol_active = False
+            self.servol_return_samples = 0
+
+    def _is_servol_active(self) -> bool:
+        """Return whether ServoL continuous control is active."""
+        with self.state_lock:
+            return self.servol_active
+
 
 def balance_tilt_from_offset(
     offset: tuple[float, float],
@@ -265,7 +507,46 @@ def balance_tilt_from_offset(
     limit = abs(config.angle_limit_deg)
     gain = config.angle_gain_deg
     tilt_x = clamp(offset_y * gain, -limit, limit)
-    tilt_y = clamp(-offset_x * gain, -limit, limit)
+    tilt_y = clamp(offset_x * gain, -limit, limit)
+    return tilt_x, tilt_y
+
+
+def compensate_offset(
+    offset: tuple[float, float],
+    yaw_deg: float,
+) -> tuple[float, float]:
+    """Rotate image-space normalized offset into the plate/TCP frame."""
+    offset_x, offset_y = offset
+    yaw = math.radians(yaw_deg)
+    cos_yaw = math.cos(yaw)
+    sin_yaw = math.sin(yaw)
+    return (
+        cos_yaw * offset_x - sin_yaw * offset_y,
+        sin_yaw * offset_x + cos_yaw * offset_y,
+    )
+
+
+def balance_tilt_from_pd(
+    offset: tuple[float, float],
+    velocity: tuple[float, float],
+    config: MotionConfig,
+) -> tuple[float, float]:
+    """Map filtered offset and velocity to bounded x/y tilt angles."""
+    offset_x, offset_y = offset
+    velocity_x, velocity_y = velocity
+    limit = abs(config.angle_limit_deg)
+    proportional_gain = config.angle_gain_deg
+    derivative_gain = config.angle_derivative_gain_deg
+    tilt_x = clamp(
+        offset_y * proportional_gain + velocity_y * derivative_gain,
+        -limit,
+        limit,
+    )
+    tilt_y = clamp(
+        offset_x * proportional_gain + velocity_x * derivative_gain,
+        -limit,
+        limit,
+    )
     return tilt_x, tilt_y
 
 
