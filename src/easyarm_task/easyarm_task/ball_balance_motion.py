@@ -78,6 +78,9 @@ class BallBalanceMotionController:
         self.last_tilt_x_deg = 0.0
         self.last_tilt_y_deg = 0.0
         self.last_command_sent = False
+        self.last_control_source = ""
+        self.last_measurement_stale = False
+        self.last_target_pose = None
         self.servol_thread = threading.Thread(
             target=self._servol_loop,
             name="easyarm_ball_balance_servol",
@@ -119,6 +122,32 @@ class BallBalanceMotionController:
         state = "active" if servol_active else "stopped"
         lines.append(f"servol: {state} {self.config.servol_rate_hz:.0f}Hz")
         return lines
+
+    def snapshot(self) -> dict:
+        """Return a thread-safe motion state snapshot for logging."""
+        with self.state_lock:
+            measurement_age = None
+            if self.last_measurement_time is not None:
+                measurement_age = max(
+                    0.0,
+                    time.monotonic() - self.last_measurement_time,
+                )
+            return {
+                "origin_pose": self.origin_pose,
+                "busy": self.busy,
+                "active_command": self.active_command,
+                "servol_active": self.servol_active,
+                "status": self.status,
+                "filtered_offset": self.filtered_offset,
+                "filtered_velocity": self.filtered_velocity,
+                "measurement_age_sec": measurement_age,
+                "last_tilt_x_deg": self.last_tilt_x_deg,
+                "last_tilt_y_deg": self.last_tilt_y_deg,
+                "last_command_sent": self.last_command_sent,
+                "last_control_source": self.last_control_source,
+                "last_measurement_stale": self.last_measurement_stale,
+                "last_target_pose": self.last_target_pose,
+            }
 
     def shutdown(self) -> None:
         """Stop the ServoL worker thread."""
@@ -202,6 +231,9 @@ class BallBalanceMotionController:
             self.last_tilt_x_deg = tilt_x_deg
             self.last_tilt_y_deg = tilt_y_deg
             self.last_command_sent = True
+            self.last_control_source = "movel_step"
+            self.last_measurement_stale = False
+            self.last_target_pose = target_pose
         self.busy = True
         self.active_command = "MoveL"
         self._set_status(
@@ -252,6 +284,7 @@ class BallBalanceMotionController:
             self.last_tilt_x_deg = 0.0
             self.last_tilt_y_deg = 0.0
             self.last_command_sent = True
+            self.last_control_source = "servol_stop"
         self._set_status("ServoL stopping, returning origin attitude")
 
     def compensated_offset(
@@ -459,22 +492,28 @@ class BallBalanceMotionController:
                 if measurement_stale:
                     tilt_x_deg = 0.0
                     tilt_y_deg = 0.0
+                    control_source = "servol_stale_origin"
                 else:
                     tilt_x_deg, tilt_y_deg = balance_tilt_from_pd(
                         offset,
                         velocity,
                         self.config,
                     )
+                    control_source = "servol_pd"
             elif self.servol_return_samples > 0:
                 tilt_x_deg = 0.0
                 tilt_y_deg = 0.0
                 self.servol_return_samples -= 1
+                measurement_stale = False
+                control_source = "servol_return_origin"
             else:
                 return None
 
             self.last_tilt_x_deg = tilt_x_deg
             self.last_tilt_y_deg = tilt_y_deg
             self.last_command_sent = True
+            self.last_control_source = control_source
+            self.last_measurement_stale = measurement_stale
             frame_id = self.config.frame_id
 
         target_pose = make_balance_target_pose(
@@ -484,6 +523,8 @@ class BallBalanceMotionController:
             tilt_y_deg,
         )
         target_pose.header.stamp = self.node.get_clock().now().to_msg()
+        with self.state_lock:
+            self.last_target_pose = target_pose
         return target_pose
 
     def _disable_servol(self) -> None:

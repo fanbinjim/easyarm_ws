@@ -16,6 +16,7 @@
 
 import argparse
 from collections import deque
+import csv
 import math
 from pathlib import Path
 import threading
@@ -27,6 +28,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from sensor_msgs.msg import JointState
 
 from .ball_balance_detector import BallBalanceDetection
 from .ball_balance_detector import CircleDetection
@@ -89,6 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show intermediate plate and ball binary masks.",
     )
     parser.add_argument(
+        "--control-log",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Record visual/control/robot state rows when plate and ball exist."
+        ),
+    )
+    parser.add_argument(
         "--named-state",
         default="pose1",
         help="Named state reached when Space is pressed.",
@@ -112,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--balance-angle-gain-deg",
         type=float,
-        default=20.0,
+        default=10.0,
         help="Tilt degrees per normalized ball offset.",
     )
     parser.add_argument(
@@ -220,37 +230,37 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ball-min-area",
         type=float,
-        default=120.0,
+        default=45.0,
         help="Minimum contour area for the dark ball.",
     )
     parser.add_argument(
         "--ball-max-area",
         type=float,
-        default=4500.0,
+        default=1200.0,
         help="Maximum contour area for the dark ball.",
     )
     parser.add_argument(
         "--ball-min-radius",
         type=float,
-        default=8.0,
+        default=4.0,
         help="Minimum ball radius in preview pixels.",
     )
     parser.add_argument(
         "--ball-max-radius",
         type=float,
-        default=45.0,
+        default=18.0,
         help="Maximum ball radius in preview pixels.",
     )
     parser.add_argument(
         "--ball-max-value",
         type=int,
-        default=95,
+        default=65,
         help="Maximum HSV value used to segment the dark ball.",
     )
     parser.add_argument(
         "--ball-min-circularity",
         type=float,
-        default=0.15,
+        default=0.25,
         help="Minimum circularity for a ball contour.",
     )
     parser.add_argument(
@@ -314,6 +324,10 @@ class BallBalanceNode(Node):
         self.window_name = args.window_name
         self.debug_mask = args.debug_mask
         self.capture = FrameCapture(default_debug_capture_dir())
+        self.control_logger = ControlLogger(
+            self.capture.session_dir,
+            enabled=args.control_log,
+        )
         self.detector_config = detection_config_from_args(args)
         self.motion = BallBalanceMotionController(
             self,
@@ -323,6 +337,7 @@ class BallBalanceNode(Node):
         self.frame_lock = threading.Lock()
         self.latest_frame = None
         self.latest_stamp = None
+        self.latest_joint_state = None
         self.latest_fps = 0.0
         self.frame_count = 0
         self.frame_times = deque(maxlen=90)
@@ -332,9 +347,19 @@ class BallBalanceNode(Node):
             Image,
             self.image_topic,
             self.on_image,
+            1,
+        )
+        self.joint_subscription = self.create_subscription(
+            JointState,
+            "/joint_states",
+            self.on_joint_state,
             10,
         )
         self.get_logger().info(f"Subscribing image topic: {self.image_topic}")
+        if args.control_log:
+            self.get_logger().info(
+                f"Control log: {self.control_logger.path}"
+            )
 
     def on_image(self, msg: Image) -> None:
         """Convert incoming ROS images to BGR OpenCV frames."""
@@ -362,6 +387,11 @@ class BallBalanceNode(Node):
             )
             self.last_log_time = now
 
+    def on_joint_state(self, msg: JointState) -> None:
+        """Keep the newest joint state for control logging."""
+        with self.frame_lock:
+            self.latest_joint_state = msg
+
     def get_frame(self):
         """Return a copy of the newest frame plus metadata."""
         with self.frame_lock:
@@ -373,6 +403,11 @@ class BallBalanceNode(Node):
                 self.frame_count,
                 self.latest_fps,
             )
+
+    def get_joint_state(self) -> JointState | None:
+        """Return the latest cached joint state."""
+        with self.frame_lock:
+            return self.latest_joint_state
 
 
 class FrameCapture:
@@ -406,6 +441,249 @@ class FrameCapture:
         path = self.session_dir / filename
         if cv2.imwrite(str(path), frame):
             self.saved_count += 1
+
+
+class ControlLogger:
+    """Write visual, control, and robot state rows to a CSV file."""
+
+    def __init__(self, session_dir: Path, enabled: bool) -> None:
+        """Create a CSV logger in the task debug session directory."""
+        self.enabled = enabled
+        self.path = session_dir / "control_log.csv"
+        self.file = None
+        self.writer = None
+        if not self.enabled:
+            return
+        session_dir.mkdir(parents=True, exist_ok=True)
+        self.file = self.path.open("w", newline="")
+        self.writer = csv.DictWriter(
+            self.file,
+            fieldnames=control_log_fields(),
+        )
+        self.writer.writeheader()
+        self.file.flush()
+
+    def close(self) -> None:
+        """Close the CSV file."""
+        if self.file is None:
+            return
+        self.file.flush()
+        self.file.close()
+        self.file = None
+        self.writer = None
+
+    def write(
+        self,
+        frame_count: int,
+        fps: float,
+        stamp,
+        detection: BallBalanceDetection,
+        motion: BallBalanceMotionController,
+        joint_state: JointState | None,
+    ) -> None:
+        """Write one row when both plate and ball are detected."""
+        if (
+            not self.enabled
+            or self.writer is None
+            or detection.plate is None
+            or detection.ball is None
+            or detection.offset is None
+        ):
+            return
+        snapshot = motion.snapshot()
+        row = build_control_log_row(
+            frame_count,
+            fps,
+            stamp,
+            detection,
+            motion.config,
+            snapshot,
+            joint_state,
+        )
+        self.writer.writerow(row)
+        if self.file is not None:
+            self.file.flush()
+
+
+def control_log_fields() -> list[str]:
+    """Return the stable CSV schema for control tuning logs."""
+    fields = [
+        "wall_time_sec",
+        "frame_count",
+        "image_stamp_sec",
+        "image_stamp_nanosec",
+        "fps",
+        "plate_found",
+        "ball_found",
+        "plate_x_px",
+        "plate_y_px",
+        "plate_radius_px",
+        "ball_x_px",
+        "ball_y_px",
+        "ball_radius_px",
+        "raw_offset_x",
+        "raw_offset_y",
+        "target_offset_x",
+        "target_offset_y",
+        "plate_offset_x",
+        "plate_offset_y",
+        "filtered_offset_x",
+        "filtered_offset_y",
+        "filtered_velocity_x",
+        "filtered_velocity_y",
+        "measurement_age_sec",
+        "kp_deg",
+        "kd_deg",
+        "angle_limit_deg",
+        "filter_alpha",
+        "camera_to_plate_yaw_deg",
+        "servol_rate_hz",
+        "servol_active",
+        "control_source",
+        "control_stale",
+        "tilt_x_deg",
+        "tilt_y_deg",
+        "motion_busy",
+        "active_command",
+        "motion_status",
+    ]
+    fields.extend(pose_fields("target_pose"))
+    fields.extend(pose_fields("origin_pose"))
+    fields.extend(joint_array_fields("joint_position"))
+    fields.extend(joint_array_fields("joint_velocity"))
+    fields.extend(joint_array_fields("joint_effort"))
+    fields.extend(["joint_names", "joint_stamp_sec", "joint_stamp_nanosec"])
+    return fields
+
+
+def pose_fields(prefix: str) -> list[str]:
+    """Return CSV fields for one PoseStamped value."""
+    return [
+        f"{prefix}_frame_id",
+        f"{prefix}_x",
+        f"{prefix}_y",
+        f"{prefix}_z",
+        f"{prefix}_qx",
+        f"{prefix}_qy",
+        f"{prefix}_qz",
+        f"{prefix}_qw",
+    ]
+
+
+def joint_array_fields(prefix: str) -> list[str]:
+    """Return CSV fields for a six-joint array."""
+    return [f"{prefix}_{index}" for index in range(1, 7)]
+
+
+def build_control_log_row(
+    frame_count: int,
+    fps: float,
+    stamp,
+    detection: BallBalanceDetection,
+    config: MotionConfig,
+    motion_snapshot: dict,
+    joint_state: JointState | None,
+) -> dict:
+    """Build one CSV row from visual detection and motion state."""
+    raw_offset = detection.offset or (None, None)
+    plate_offset = (
+        compensate_offset(detection.offset, config.camera_to_plate_yaw_deg)
+        if detection.offset is not None else (None, None)
+    )
+    filtered_offset = motion_snapshot.get("filtered_offset") or (None, None)
+    filtered_velocity = motion_snapshot.get("filtered_velocity") or (
+        None,
+        None,
+    )
+    row = {
+        "wall_time_sec": time.time(),
+        "frame_count": frame_count,
+        "image_stamp_sec": "" if stamp is None else stamp.sec,
+        "image_stamp_nanosec": "" if stamp is None else stamp.nanosec,
+        "fps": fps,
+        "plate_found": detection.plate is not None,
+        "ball_found": detection.ball is not None,
+        "plate_x_px": detection.plate.center[0],
+        "plate_y_px": detection.plate.center[1],
+        "plate_radius_px": detection.plate.radius,
+        "ball_x_px": detection.ball.center[0],
+        "ball_y_px": detection.ball.center[1],
+        "ball_radius_px": detection.ball.radius,
+        "raw_offset_x": raw_offset[0],
+        "raw_offset_y": raw_offset[1],
+        "target_offset_x": 0.0,
+        "target_offset_y": 0.0,
+        "plate_offset_x": plate_offset[0],
+        "plate_offset_y": plate_offset[1],
+        "filtered_offset_x": filtered_offset[0],
+        "filtered_offset_y": filtered_offset[1],
+        "filtered_velocity_x": filtered_velocity[0],
+        "filtered_velocity_y": filtered_velocity[1],
+        "measurement_age_sec": motion_snapshot.get("measurement_age_sec"),
+        "kp_deg": config.angle_gain_deg,
+        "kd_deg": config.angle_derivative_gain_deg,
+        "angle_limit_deg": config.angle_limit_deg,
+        "filter_alpha": config.filter_alpha,
+        "camera_to_plate_yaw_deg": config.camera_to_plate_yaw_deg,
+        "servol_rate_hz": config.servol_rate_hz,
+        "servol_active": motion_snapshot.get("servol_active"),
+        "control_source": motion_snapshot.get("last_control_source"),
+        "control_stale": motion_snapshot.get("last_measurement_stale"),
+        "tilt_x_deg": motion_snapshot.get("last_tilt_x_deg"),
+        "tilt_y_deg": motion_snapshot.get("last_tilt_y_deg"),
+        "motion_busy": motion_snapshot.get("busy"),
+        "active_command": motion_snapshot.get("active_command"),
+        "motion_status": motion_snapshot.get("status"),
+    }
+    row.update(flatten_pose("target_pose",
+                            motion_snapshot.get("last_target_pose")))
+    row.update(flatten_pose("origin_pose", motion_snapshot.get("origin_pose")))
+    row.update(flatten_joint_state(joint_state))
+    return row
+
+
+def flatten_pose(prefix: str, pose_stamped) -> dict:
+    """Flatten a PoseStamped into CSV columns."""
+    row = {field: "" for field in pose_fields(prefix)}
+    if pose_stamped is None:
+        return row
+    pose = pose_stamped.pose
+    row.update({
+        f"{prefix}_frame_id": pose_stamped.header.frame_id,
+        f"{prefix}_x": pose.position.x,
+        f"{prefix}_y": pose.position.y,
+        f"{prefix}_z": pose.position.z,
+        f"{prefix}_qx": pose.orientation.x,
+        f"{prefix}_qy": pose.orientation.y,
+        f"{prefix}_qz": pose.orientation.z,
+        f"{prefix}_qw": pose.orientation.w,
+    })
+    return row
+
+
+def flatten_joint_state(joint_state: JointState | None) -> dict:
+    """Flatten latest JointState into CSV columns."""
+    row = {}
+    for prefix in ("joint_position", "joint_velocity", "joint_effort"):
+        row.update({field: "" for field in joint_array_fields(prefix)})
+    row.update({
+        "joint_names": "",
+        "joint_stamp_sec": "",
+        "joint_stamp_nanosec": "",
+    })
+    if joint_state is None:
+        return row
+    row["joint_names"] = " ".join(joint_state.name)
+    row["joint_stamp_sec"] = joint_state.header.stamp.sec
+    row["joint_stamp_nanosec"] = joint_state.header.stamp.nanosec
+    for prefix, values in (
+        ("joint_position", joint_state.position),
+        ("joint_velocity", joint_state.velocity),
+        ("joint_effort", joint_state.effort),
+    ):
+        for index, value in enumerate(values[:6], start=1):
+            row[f"{prefix}_{index}"] = value
+    return row
 
 
 def estimate_fps(frame_times: deque[float]) -> float:
@@ -856,6 +1134,14 @@ def run_preview(node: BallBalanceNode) -> int:
         if frame_count != last_measurement_frame_count:
             node.motion.update_measurement(detection.offset)
             last_measurement_frame_count = frame_count
+            node.control_logger.write(
+                frame_count,
+                fps,
+                stamp,
+                detection,
+                node.motion,
+                node.get_joint_state(),
+            )
         status_lines = build_status_lines(
             frame_count,
             fps,
@@ -949,6 +1235,7 @@ def main() -> int:
         return 0
     finally:
         node.motion.shutdown()
+        node.control_logger.close()
         cv2.destroyAllWindows()
         node.destroy_node()
         rclpy.shutdown()
