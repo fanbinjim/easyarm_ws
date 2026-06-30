@@ -33,6 +33,8 @@ from .ball_balance_detector import DetectionConfig
 from .ball_balance_detector import clamp
 from .ball_balance_detector import detect_objects
 from .ball_balance_detector import PlateCandidateDebug
+from .ball_balance_motion import BallBalanceMotionController
+from .ball_balance_motion import MotionConfig
 
 
 DEFAULT_IMAGE_TOPIC = "/camera/camera/color/image_raw"
@@ -83,6 +85,45 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug-mask",
         action="store_true",
         help="Show intermediate plate and ball binary masks.",
+    )
+    parser.add_argument(
+        "--named-state",
+        default="pose1",
+        help="Named state reached when Space is pressed.",
+    )
+    parser.add_argument(
+        "--motion-frame-id",
+        default="base_link",
+        help="Target frame for GetPose and MoveL commands.",
+    )
+    parser.add_argument(
+        "--motion-source-frame",
+        default="",
+        help="Source frame for GetPose. Empty uses motion server ee_link.",
+    )
+    parser.add_argument(
+        "--balance-angle-limit-deg",
+        type=float,
+        default=15.0,
+        help="Maximum absolute x/y tilt angle sent by one MoveL command.",
+    )
+    parser.add_argument(
+        "--balance-angle-gain-deg",
+        type=float,
+        default=20.0,
+        help="Tilt degrees per normalized ball offset.",
+    )
+    parser.add_argument(
+        "--motion-velocity-scale",
+        type=float,
+        default=0.1,
+        help="Velocity scale for pose1 and MoveL commands.",
+    )
+    parser.add_argument(
+        "--motion-acceleration-scale",
+        type=float,
+        default=0.1,
+        help="Acceleration scale for pose1 and MoveL commands.",
     )
     parser.add_argument(
         "--plate-min-radius",
@@ -205,6 +246,19 @@ def detection_config_from_args(args: argparse.Namespace) -> DetectionConfig:
     )
 
 
+def motion_config_from_args(args: argparse.Namespace) -> MotionConfig:
+    """Create a motion-control configuration from command-line arguments."""
+    return MotionConfig(
+        named_state=args.named_state,
+        frame_id=args.motion_frame_id,
+        source_frame=args.motion_source_frame,
+        angle_limit_deg=args.balance_angle_limit_deg,
+        angle_gain_deg=args.balance_angle_gain_deg,
+        velocity_scale=args.motion_velocity_scale,
+        acceleration_scale=args.motion_acceleration_scale,
+    )
+
+
 class BallBalanceNode(Node):
     """Subscribe to a ROS image topic and keep the newest OpenCV frame."""
 
@@ -218,6 +272,10 @@ class BallBalanceNode(Node):
         self.debug_mask = args.debug_mask
         self.capture = FrameCapture(default_debug_capture_dir())
         self.detector_config = detection_config_from_args(args)
+        self.motion = BallBalanceMotionController(
+            self,
+            motion_config_from_args(args),
+        )
         self.bridge = CvBridge()
         self.frame_lock = threading.Lock()
         self.latest_frame = None
@@ -428,6 +486,7 @@ def build_status_lines(
     source_size: tuple[int, int],
     stamp,
     detection: BallBalanceDetection,
+    motion: BallBalanceMotionController,
 ) -> list[str]:
     """Build the text lines displayed in the preview."""
     stamp_text = (
@@ -451,6 +510,7 @@ def build_status_lines(
     elif detection.offset is not None:
         dx, dy = detection.offset
         lines.append(f"offset: x={dx:+.3f}, y={dy:+.3f}")
+    lines.extend(motion.status_lines())
     return lines
 
 
@@ -624,7 +684,7 @@ def run_preview(node: BallBalanceNode) -> int:
             key = cv2.waitKey(10) & 0xFF
             if key in (27, ord("q")):
                 return 0
-            handle_capture_key(node, key)
+            handle_key(node, key, None)
             continue
 
         node.capture.save(frame, frame_count)
@@ -643,6 +703,7 @@ def run_preview(node: BallBalanceNode) -> int:
             source_size,
             stamp,
             detection,
+            node.motion,
         )
         draw_text_lines(preview, status_lines, (14, 28))
         cv2.imshow(node.window_name, preview)
@@ -653,9 +714,24 @@ def run_preview(node: BallBalanceNode) -> int:
         key = cv2.waitKey(1) & 0xFF
         if key in (27, ord("q")):
             return 0
-        handle_capture_key(node, key)
+        handle_key(node, key, detection)
 
     return 0
+
+
+def handle_key(
+    node: BallBalanceNode,
+    key: int,
+    detection: BallBalanceDetection | None,
+) -> None:
+    """Handle keyboard shortcuts from the OpenCV preview."""
+    if key == ord(" "):
+        node.motion.move_to_named_state()
+    elif key in (ord("b"), ord("B")):
+        offset = None if detection is None else detection.offset
+        node.motion.send_balance_step(offset)
+    else:
+        handle_capture_key(node, key)
 
 
 def handle_capture_key(node: BallBalanceNode, key: int) -> None:

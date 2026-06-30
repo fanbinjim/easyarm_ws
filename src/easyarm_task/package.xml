@@ -8,6 +8,8 @@
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
+  <depend>easyarm_interfaces</depend>
+  <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
 
   <exec_depend>cv_bridge</exec_depend>
