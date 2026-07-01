@@ -20,7 +20,7 @@
                 <param name="velocity_limit">32.97</param>
                 <param name="smoothing_alpha">0.8</param>
                 <param name="max_velocity">32.97</param>
-                <param name="max_acceleration">8.0</param>
+                <param name="max_acceleration">40.0</param>
                 <param name="control_period">0.005</param>
                 <param name="control_mode">motion_control</param>
                 <!-- <param name="control_mode">position_csp</param> -->

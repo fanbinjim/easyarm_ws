@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Grayscale edge based detector for the EasyArm ball balance task."""
+"""Color based detector for the EasyArm ball balance task."""
 
 from dataclasses import dataclass
 import math
@@ -94,8 +94,57 @@ def detect_objects(
     frame: np.ndarray,
     config: DetectionConfig,
 ) -> BallBalanceDetection:
-    """Detect the plate and dark ball in a BGR frame."""
-    plate, plate_mask, plate_debug = detect_plate(frame, config)
+    """Detect the green plate and red ball in a BGR frame."""
+    return detect_objects_by_color(frame, config)
+
+
+def detect_objects_by_color(
+    frame: np.ndarray,
+    config: DetectionConfig,
+) -> BallBalanceDetection:
+    """Detect the plate and ball from HSV color masks."""
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    plate, plate_mask, plate_debug = detect_plate_from_hsv(
+        frame,
+        hsv,
+        config,
+    )
+    if plate is None:
+        debug = DetectionDebug(
+            gray=plate_debug.gray,
+            roi_mask=plate_debug.roi_mask,
+            edge_mask=plate_debug.edge_mask,
+            plate_mask=plate_mask,
+            ball_mask=None,
+            plate_candidates=plate_debug.plate_candidates,
+        )
+        return BallBalanceDetection(None, None, None, plate_mask, None, debug)
+
+    ball, ball_mask = detect_ball_from_hsv(frame, hsv, plate, config)
+    offset = None
+    if ball is not None and plate.radius > 0.0:
+        offset = (
+            (ball.center[0] - plate.center[0]) / plate.radius,
+            (ball.center[1] - plate.center[1]) / plate.radius,
+        )
+    debug = DetectionDebug(
+        gray=plate_debug.gray,
+        roi_mask=plate_debug.roi_mask,
+        edge_mask=plate_debug.edge_mask,
+        plate_mask=plate_mask,
+        ball_mask=ball_mask,
+        plate_candidates=plate_debug.plate_candidates,
+    )
+    return BallBalanceDetection(plate, ball, offset, plate_mask, ball_mask,
+                                debug)
+
+
+def detect_objects_by_edges(
+    frame: np.ndarray,
+    config: DetectionConfig,
+) -> BallBalanceDetection:
+    """Detect objects with the previous grayscale edge pipeline."""
+    plate, plate_mask, plate_debug = detect_plate_by_edges(frame, config)
     if plate is None:
         debug = DetectionDebug(
             gray=plate_debug.gray,
@@ -130,7 +179,58 @@ def detect_plate(
     frame: np.ndarray,
     config: DetectionConfig,
 ) -> tuple[CircleDetection | None, np.ndarray, DetectionDebug]:
-    """Detect the white plate with grayscale Hough circle detection."""
+    """Detect the green plate from a color component."""
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    return detect_plate_from_hsv(frame, hsv, config)
+
+
+def detect_plate_from_hsv(
+    frame: np.ndarray,
+    hsv: np.ndarray,
+    config: DetectionConfig,
+) -> tuple[CircleDetection | None, np.ndarray, DetectionDebug]:
+    """Detect the green plate from a precomputed HSV frame."""
+    green_mask = cv2.inRange(hsv, (55, 100, 80), (90, 255, 255))
+    roi_mask = normalized_roi_mask(
+        frame.shape[:2],
+        config.plate_roi_x_min,
+        config.plate_roi_x_max,
+        config.plate_roi_y_min,
+        config.plate_roi_y_max,
+    )
+    green_roi = cv2.bitwise_and(green_mask, roi_mask)
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    plate_mask = cv2.morphologyEx(green_roi, cv2.MORPH_CLOSE, close_kernel)
+    plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_OPEN, open_kernel)
+    candidates = detect_plate_candidates_by_color(
+        frame,
+        plate_mask,
+        config,
+    )
+    accepted = [candidate for candidate in candidates if candidate.accepted]
+    best = max(
+        accepted,
+        key=lambda candidate: candidate.score or float("-inf"),
+        default=None,
+    )
+    plate = best.detection if best is not None else None
+    debug = DetectionDebug(
+        gray=hsv[:, :, 2],
+        roi_mask=roi_mask,
+        edge_mask=green_roi,
+        plate_mask=plate_mask,
+        ball_mask=None,
+        plate_candidates=candidates,
+    )
+    return plate, plate_mask, debug
+
+
+def detect_plate_by_edges(
+    frame: np.ndarray,
+    config: DetectionConfig,
+) -> tuple[CircleDetection | None, np.ndarray, DetectionDebug]:
+    """Detect the plate with the previous grayscale Hough pipeline."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (9, 9), 0)
     roi_mask = normalized_roi_mask(
@@ -160,6 +260,92 @@ def detect_plate(
         plate_candidates=candidates,
     )
     return plate, plate_mask, debug
+
+
+def detect_plate_candidates_by_color(
+    frame: np.ndarray,
+    plate_mask: np.ndarray,
+    config: DetectionConfig,
+) -> list[PlateCandidateDebug]:
+    """Detect and score green plate candidates from color components."""
+    contours, _ = cv2.findContours(
+        plate_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    roi = roi_bounds(frame.shape[:2], config)
+    candidates = []
+    for contour in contours:
+        candidate = contour_to_area_circle(contour, frame.shape[:2])
+        if candidate is None:
+            continue
+        if candidate.radius < config.plate_min_radius:
+            candidates.append(rejected_plate_candidate(candidate, "radius"))
+            continue
+        if candidate.radius > config.plate_max_radius:
+            candidates.append(rejected_plate_candidate(candidate, "radius"))
+            continue
+        if not circle_inside_roi(candidate, roi):
+            candidates.append(rejected_plate_candidate(candidate, "roi"))
+            continue
+        score = plate_color_score(frame, candidate, contour, config)
+        candidates.append(accepted_plate_candidate(
+            candidate,
+            score,
+            edge_support=1.0,
+            color_ratio=candidate.circularity,
+        ))
+    return candidates
+
+
+def contour_to_area_circle(
+    contour: np.ndarray,
+    image_shape: tuple[int, int],
+) -> CircleDetection | None:
+    """Convert a color contour to a circle using centroid and area radius."""
+    area = float(cv2.contourArea(contour))
+    if area <= 0.0:
+        return None
+    moments = cv2.moments(contour)
+    if abs(moments["m00"]) <= 1.0e-9:
+        return None
+    center = (
+        float(moments["m10"] / moments["m00"]),
+        float(moments["m01"] / moments["m00"]),
+    )
+    radius = math.sqrt(area / math.pi)
+    perimeter = cv2.arcLength(contour, True)
+    if perimeter <= 0.0:
+        return None
+    circularity = 4.0 * math.pi * area / (perimeter * perimeter)
+    bbox = circle_bbox(center, radius, image_shape)
+    return CircleDetection(center, radius, area, circularity, bbox)
+
+
+def plate_color_score(
+    frame: np.ndarray,
+    circle: CircleDetection,
+    contour: np.ndarray,
+    config: DetectionConfig,
+) -> float:
+    """Score a green plate contour candidate."""
+    expected = (
+        frame.shape[1] * config.plate_expected_x,
+        frame.shape[0] * config.plate_expected_y,
+    )
+    center_penalty = math.dist(circle.center, expected) / max(
+        frame.shape[1],
+        1,
+    )
+    expected_radius = max(config.plate_expected_radius, 1.0)
+    radius_penalty = abs(circle.radius - expected_radius) / expected_radius
+    area = cv2.contourArea(contour)
+    return (
+        area
+        + circle.circularity * 2500.0
+        - center_penalty * 3000.0
+        - radius_penalty * 2500.0
+    )
 
 
 def detect_plate_candidates(
@@ -353,15 +539,27 @@ def detect_ball(
     plate: CircleDetection,
     config: DetectionConfig,
 ) -> tuple[CircleDetection | None, np.ndarray]:
-    """Detect the dark circular object inside the detected plate."""
+    """Detect the red circular object inside the detected plate."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    dark = cv2.inRange(hsv, (0, 0, 0), (179, 255, config.ball_max_value))
+    return detect_ball_from_hsv(frame, hsv, plate, config)
+
+
+def detect_ball_from_hsv(
+    frame: np.ndarray,
+    hsv: np.ndarray,
+    plate: CircleDetection,
+    config: DetectionConfig,
+) -> tuple[CircleDetection | None, np.ndarray]:
+    """Detect the red circular object from a precomputed HSV frame."""
+    red_low = cv2.inRange(hsv, (0, 70, 45), (12, 255, 255))
+    red_high = cv2.inRange(hsv, (165, 70, 45), (179, 255, 255))
+    red = cv2.bitwise_or(red_low, red_high)
     plate_inner_mask = make_plate_mask(
         frame.shape[:2],
         plate,
         scale=config.ball_plate_inner_scale,
     )
-    mask = cv2.bitwise_and(dark, plate_inner_mask)
+    mask = cv2.bitwise_and(red, plate_inner_mask)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)

@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Detect the plate and dark ball for the EasyArm ball balance task."""
+"""Detect the plate and red ball for the EasyArm ball balance task."""
 
 import argparse
 from collections import deque
 import csv
+from dataclasses import dataclass
+from dataclasses import replace
 import math
 from pathlib import Path
 import threading
@@ -47,6 +49,364 @@ DEFAULT_DISPLAY_HEIGHT = 480
 DEBUG_DISPLAY_WIDTH = 320
 DEBUG_DISPLAY_HEIGHT = 240
 WINDOW_NAME = "EasyArm Ball Balance"
+TUNING_WINDOW_NAME = "Ball Balance Tuning"
+
+
+@dataclass(frozen=True)
+class TrackbarSpec:
+    """One OpenCV trackbar mapped to a runtime parameter."""
+
+    name: str
+    group: str
+    field: str
+    minimum: float
+    maximum: float
+    scale: float
+    is_int: bool = False
+
+    @property
+    def max_position(self) -> int:
+        """Return the integer trackbar range."""
+        return int(round((self.maximum - self.minimum) * self.scale))
+
+    def value_to_position(self, value: float) -> int:
+        """Convert a real parameter value to a trackbar position."""
+        clamped = clamp(float(value), self.minimum, self.maximum)
+        return int(round((clamped - self.minimum) * self.scale))
+
+    def position_to_value(self, position: int) -> float | int:
+        """Convert a trackbar position to a real parameter value."""
+        value = self.minimum + float(position) / self.scale
+        value = clamp(value, self.minimum, self.maximum)
+        if self.is_int:
+            return int(round(value))
+        return value
+
+
+TRACKBAR_SPECS = [
+    TrackbarSpec("kp x0.1", "motion", "angle_gain_deg", 0.0, 40.0, 10.0),
+    TrackbarSpec(
+        "damp x0.1",
+        "motion",
+        "angle_derivative_gain_deg",
+        0.0,
+        20.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "tangent damp x0.1",
+        "motion",
+        "tangent_damping_deg",
+        0.0,
+        30.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "lead ms",
+        "motion",
+        "delay_compensation_sec",
+        0.0,
+        0.5,
+        1000.0,
+    ),
+    TrackbarSpec(
+        "target x x0.01",
+        "motion",
+        "target_offset_x",
+        -1.0,
+        1.0,
+        100.0,
+    ),
+    TrackbarSpec(
+        "target y x0.01",
+        "motion",
+        "target_offset_y",
+        -1.0,
+        1.0,
+        100.0,
+    ),
+    TrackbarSpec(
+        "limit deg",
+        "motion",
+        "angle_limit_deg",
+        1.0,
+        30.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "yaw deg +180",
+        "motion",
+        "camera_to_plate_yaw_deg",
+        -180.0,
+        180.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "filter x0.01",
+        "motion",
+        "filter_alpha",
+        0.01,
+        1.0,
+        100.0,
+    ),
+    TrackbarSpec(
+        "max age x0.001s",
+        "motion",
+        "max_measurement_age_sec",
+        0.02,
+        1.0,
+        1000.0,
+    ),
+    TrackbarSpec(
+        "vel window",
+        "motion",
+        "velocity_window_size",
+        2.0,
+        12.0,
+        1.0,
+        is_int=True,
+    ),
+    TrackbarSpec(
+        "center in x0.01",
+        "motion",
+        "center_radius",
+        0.05,
+        1.00,
+        100.0,
+    ),
+    TrackbarSpec(
+        "center out x0.01",
+        "motion",
+        "center_exit_radius",
+        0.05,
+        1.10,
+        100.0,
+    ),
+    TrackbarSpec(
+        "center limit deg",
+        "motion",
+        "center_angle_limit_deg",
+        1.0,
+        20.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "center kp scale",
+        "motion",
+        "center_position_scale",
+        0.0,
+        1.0,
+        100.0,
+    ),
+    TrackbarSpec(
+        "center radial kd",
+        "motion",
+        "center_radial_damping_deg",
+        0.0,
+        30.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "center tangent kd",
+        "motion",
+        "center_tangent_damping_deg",
+        0.0,
+        30.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "edge in x0.01",
+        "motion",
+        "recovery_radius",
+        0.10,
+        1.20,
+        100.0,
+    ),
+    TrackbarSpec(
+        "edge out x0.01",
+        "motion",
+        "recovery_exit_radius",
+        0.05,
+        1.10,
+        100.0,
+    ),
+    TrackbarSpec(
+        "edge vt in x0.1",
+        "motion",
+        "recovery_tangent_enter_velocity",
+        0.0,
+        10.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "edge vt out x0.1",
+        "motion",
+        "recovery_tangent_exit_velocity",
+        0.0,
+        10.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "edge radial kp",
+        "motion",
+        "recovery_radial_gain_deg",
+        0.0,
+        30.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "edge radial kd",
+        "motion",
+        "recovery_radial_damping_deg",
+        0.0,
+        30.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "edge tangent kd",
+        "motion",
+        "recovery_tangent_damping_deg",
+        0.0,
+        30.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "edge limit deg",
+        "motion",
+        "recovery_angle_limit_deg",
+        1.0,
+        30.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "tilt rate deg/s",
+        "motion",
+        "tilt_rate_limit_deg_s",
+        0.0,
+        300.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "plate r min",
+        "detection",
+        "plate_min_radius",
+        20.0,
+        180.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "plate r max",
+        "detection",
+        "plate_max_radius",
+        20.0,
+        220.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "plate expect r",
+        "detection",
+        "plate_expected_radius",
+        20.0,
+        220.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "roi x min x0.001",
+        "detection",
+        "plate_roi_x_min",
+        0.0,
+        1.0,
+        1000.0,
+    ),
+    TrackbarSpec(
+        "roi x max x0.001",
+        "detection",
+        "plate_roi_x_max",
+        0.0,
+        1.0,
+        1000.0,
+    ),
+    TrackbarSpec(
+        "roi y min x0.001",
+        "detection",
+        "plate_roi_y_min",
+        0.0,
+        1.0,
+        1000.0,
+    ),
+    TrackbarSpec(
+        "roi y max x0.001",
+        "detection",
+        "plate_roi_y_max",
+        0.0,
+        1.0,
+        1000.0,
+    ),
+    TrackbarSpec(
+        "expect x x0.001",
+        "detection",
+        "plate_expected_x",
+        0.0,
+        1.0,
+        1000.0,
+    ),
+    TrackbarSpec(
+        "expect y x0.001",
+        "detection",
+        "plate_expected_y",
+        0.0,
+        1.0,
+        1000.0,
+    ),
+    TrackbarSpec(
+        "ball r min",
+        "detection",
+        "ball_min_radius",
+        1.0,
+        60.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "ball r max",
+        "detection",
+        "ball_max_radius",
+        1.0,
+        80.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "ball area min",
+        "detection",
+        "ball_min_area",
+        1.0,
+        3000.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "ball area max",
+        "detection",
+        "ball_max_area",
+        10.0,
+        8000.0,
+        1.0,
+    ),
+    TrackbarSpec(
+        "ball circ x0.01",
+        "detection",
+        "ball_min_circularity",
+        0.01,
+        1.0,
+        100.0,
+    ),
+    TrackbarSpec(
+        "inner scale x0.01",
+        "detection",
+        "ball_plate_inner_scale",
+        0.10,
+        1.20,
+        100.0,
+    ),
+]
 
 
 def default_debug_capture_dir() -> Path:
@@ -122,14 +482,46 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--balance-angle-gain-deg",
         type=float,
-        default=10.0,
+        default=6.5,
         help="Tilt degrees per normalized ball offset.",
     )
     parser.add_argument(
         "--balance-angle-d-gain-deg",
         type=float,
-        default=2.0,
-        help="Tilt degrees per normalized ball offset velocity.",
+        default=1.5,
+        help=(
+            "Damping tilt degrees per normalized ball offset "
+            "velocity."
+        ),
+    )
+    parser.add_argument(
+        "--balance-tangent-d-gain-deg",
+        type=float,
+        default=3.0,
+        help=(
+            "Extra tangent-velocity damping applied at every radius."
+        ),
+    )
+    parser.add_argument(
+        "--balance-delay-compensation-sec",
+        type=float,
+        default=0.0,
+        help=(
+            "Forward prediction time for visual offset latency "
+            "compensation."
+        ),
+    )
+    parser.add_argument(
+        "--balance-target-offset-x",
+        type=float,
+        default=-0.17,
+        help="Target normalized x offset after yaw compensation.",
+    )
+    parser.add_argument(
+        "--balance-target-offset-y",
+        type=float,
+        default=0.43,
+        help="Target normalized y offset after yaw compensation.",
     )
     parser.add_argument(
         "--camera-to-plate-yaw-deg",
@@ -144,13 +536,150 @@ def build_parser() -> argparse.ArgumentParser:
         "--balance-filter-alpha",
         type=float,
         default=0.35,
-        help="Low-pass alpha for ServoL visual offset filtering.",
+        help=(
+            "Deprecated compatibility value; visual position is no longer "
+            "low-pass filtered."
+        ),
     )
     parser.add_argument(
         "--balance-max-measurement-age-sec",
         type=float,
         default=0.2,
         help="Maximum visual measurement age before ServoL commands origin.",
+    )
+    parser.add_argument(
+        "--balance-velocity-window-size",
+        type=int,
+        default=5,
+        help="Recent visual samples used for least-squares velocity fitting.",
+    )
+    parser.add_argument(
+        "--balance-center-radius",
+        type=float,
+        default=0.35,
+        help="Radius where continuous center damping is fully applied.",
+    )
+    parser.add_argument(
+        "--balance-center-exit-radius",
+        type=float,
+        default=0.62,
+        help="Radius where continuous center damping fades out.",
+    )
+    parser.add_argument(
+        "--balance-center-speed-enter-velocity",
+        type=float,
+        default=1.2,
+        help=(
+            "Normalized xy speed that enters center damping before the "
+            "ball reaches the center radius."
+        ),
+    )
+    parser.add_argument(
+        "--balance-center-speed-exit-velocity",
+        type=float,
+        default=0.6,
+        help="Normalized xy speed below which center damping can exit.",
+    )
+    parser.add_argument(
+        "--balance-center-angle-limit-deg",
+        type=float,
+        default=6.0,
+        help="Tilt limit blended in near the center region.",
+    )
+    parser.add_argument(
+        "--balance-center-position-scale",
+        type=float,
+        default=0.15,
+        help="Position gain scale blended in near the center region.",
+    )
+    parser.add_argument(
+        "--balance-center-radial-d-gain-deg",
+        type=float,
+        default=4.0,
+        help="Extra radial damping gain while center damping is active.",
+    )
+    parser.add_argument(
+        "--balance-center-tangent-d-gain-deg",
+        type=float,
+        default=8.0,
+        help="Extra tangent damping gain while center damping is active.",
+    )
+    parser.add_argument(
+        "--balance-recovery-radius",
+        type=float,
+        default=0.72,
+        help="Radius where continuous edge recovery is fully applied.",
+    )
+    parser.add_argument(
+        "--balance-recovery-exit-radius",
+        type=float,
+        default=0.62,
+        help="Radius where continuous edge recovery starts to fade in.",
+    )
+    parser.add_argument(
+        "--balance-recovery-tangent-enter-velocity",
+        type=float,
+        default=1.0,
+        help=(
+            "Normalized tangent velocity that can enter edge recovery "
+            "before the ball reaches the hard radius threshold."
+        ),
+    )
+    parser.add_argument(
+        "--balance-recovery-tangent-exit-velocity",
+        type=float,
+        default=0.6,
+        help=(
+            "Tangent velocity where edge recovery allows full radial pull."
+        ),
+    )
+    parser.add_argument(
+        "--balance-recovery-radial-exit-velocity",
+        type=float,
+        default=0.8,
+        help=(
+            "Maximum normalized radial velocity allowed before edge "
+            "recovery can switch back to PD."
+        ),
+    )
+    parser.add_argument(
+        "--balance-recovery-speed-exit-velocity",
+        type=float,
+        default=1.0,
+        help=(
+            "Maximum normalized xy speed allowed before edge recovery "
+            "can switch back to PD."
+        ),
+    )
+    parser.add_argument(
+        "--balance-recovery-radial-gain-deg",
+        type=float,
+        default=8.0,
+        help="Edge recovery radial pull-in gain in tilt degrees.",
+    )
+    parser.add_argument(
+        "--balance-recovery-radial-d-gain-deg",
+        type=float,
+        default=2.0,
+        help="Edge recovery radial damping gain in tilt degrees.",
+    )
+    parser.add_argument(
+        "--balance-recovery-tangent-d-gain-deg",
+        type=float,
+        default=8.0,
+        help="Edge recovery tangent damping gain in tilt degrees.",
+    )
+    parser.add_argument(
+        "--balance-recovery-angle-limit-deg",
+        type=float,
+        default=8.0,
+        help="Tilt limit blended in near the edge region.",
+    )
+    parser.add_argument(
+        "--balance-tilt-rate-limit-deg-s",
+        type=float,
+        default=80.0,
+        help="Maximum tilt command slew rate in degrees per second.",
     )
     parser.add_argument(
         "--motion-velocity-scale",
@@ -167,7 +696,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--servol-rate-hz",
         type=float,
-        default=200.0,
+        default=100.0,
         help=(
             "ServoL target publish rate when O key starts "
             "continuous control."
@@ -176,68 +705,68 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--plate-min-radius",
         type=float,
-        default=75.0,
+        default=100.0,
         help="Minimum plate radius in preview pixels.",
     )
     parser.add_argument(
         "--plate-max-radius",
         type=float,
-        default=115.0,
+        default=150.0,
         help="Maximum plate radius in preview pixels.",
     )
     parser.add_argument(
         "--plate-roi-x-min",
         type=float,
-        default=0.3,
+        default=0.22,
         help="Normalized left bound of the plate search ROI.",
     )
     parser.add_argument(
         "--plate-roi-x-max",
         type=float,
-        default=0.77,
+        default=0.86,
         help="Normalized right bound of the plate search ROI.",
     )
     parser.add_argument(
         "--plate-roi-y-min",
         type=float,
-        default=0.31,
+        default=0.22,
         help="Normalized top bound of the plate search ROI.",
     )
     parser.add_argument(
         "--plate-roi-y-max",
         type=float,
-        default=0.86,
+        default=0.95,
         help="Normalized bottom bound of the plate search ROI.",
     )
     parser.add_argument(
         "--plate-expected-x",
         type=float,
-        default=0.525,
+        default=0.543,
         help="Expected normalized plate center x used as a soft prior.",
     )
     parser.add_argument(
         "--plate-expected-y",
         type=float,
-        default=0.595,
+        default=0.603,
         help="Expected normalized plate center y used as a soft prior.",
     )
     parser.add_argument(
         "--plate-expected-radius",
         type=float,
-        default=90.5,
+        default=124.0,
         help="Expected plate radius in preview pixels.",
     )
     parser.add_argument(
         "--ball-min-area",
         type=float,
         default=45.0,
-        help="Minimum contour area for the dark ball.",
+        help="Minimum contour area for the red ball.",
     )
     parser.add_argument(
         "--ball-max-area",
         type=float,
         default=1200.0,
-        help="Maximum contour area for the dark ball.",
+        help="Maximum contour area for the red ball.",
     )
     parser.add_argument(
         "--ball-min-radius",
@@ -255,7 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ball-max-value",
         type=int,
         default=65,
-        help="Maximum HSV value used to segment the dark ball.",
+        help="Deprecated compatibility value; red ball uses hue/saturation.",
     )
     parser.add_argument(
         "--ball-min-circularity",
@@ -274,7 +803,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def detection_config_from_args(args: argparse.Namespace) -> DetectionConfig:
     """Create a detector configuration from command-line arguments."""
-    return DetectionConfig(
+    return normalize_detection_config(DetectionConfig(
         plate_min_radius=args.plate_min_radius,
         plate_max_radius=args.plate_max_radius,
         plate_roi_x_min=args.plate_roi_x_min,
@@ -291,6 +820,45 @@ def detection_config_from_args(args: argparse.Namespace) -> DetectionConfig:
         ball_max_value=args.ball_max_value,
         ball_min_circularity=args.ball_min_circularity,
         ball_plate_inner_scale=args.ball_plate_inner_scale,
+    ))
+
+
+def normalize_detection_config(config: DetectionConfig) -> DetectionConfig:
+    """Clamp runtime-tuned detection parameters to valid ranges."""
+    plate_min_radius = max(1.0, config.plate_min_radius)
+    plate_max_radius = max(plate_min_radius + 1.0, config.plate_max_radius)
+    ball_min_radius = max(0.5, config.ball_min_radius)
+    ball_max_radius = max(ball_min_radius + 0.5, config.ball_max_radius)
+    ball_min_area = max(0.5, config.ball_min_area)
+    ball_max_area = max(ball_min_area + 1.0, config.ball_max_area)
+    roi_x_min = clamp(config.plate_roi_x_min, 0.0, 1.0)
+    roi_x_max = clamp(config.plate_roi_x_max, 0.0, 1.0)
+    roi_y_min = clamp(config.plate_roi_y_min, 0.0, 1.0)
+    roi_y_max = clamp(config.plate_roi_y_max, 0.0, 1.0)
+    if roi_x_max <= roi_x_min:
+        roi_x_min = min(0.99, roi_x_min)
+        roi_x_max = min(1.0, roi_x_min + 0.01)
+    if roi_y_max <= roi_y_min:
+        roi_y_min = min(0.99, roi_y_min)
+        roi_y_max = min(1.0, roi_y_min + 0.01)
+    return replace(
+        config,
+        plate_min_radius=plate_min_radius,
+        plate_max_radius=plate_max_radius,
+        plate_roi_x_min=roi_x_min,
+        plate_roi_x_max=roi_x_max,
+        plate_roi_y_min=roi_y_min,
+        plate_roi_y_max=roi_y_max,
+        plate_expected_x=clamp(config.plate_expected_x, 0.0, 1.0),
+        plate_expected_y=clamp(config.plate_expected_y, 0.0, 1.0),
+        plate_expected_radius=max(1.0, config.plate_expected_radius),
+        ball_min_area=ball_min_area,
+        ball_max_area=ball_max_area,
+        ball_min_radius=ball_min_radius,
+        ball_max_radius=ball_max_radius,
+        ball_max_value=int(clamp(config.ball_max_value, 1, 255)),
+        ball_min_circularity=clamp(config.ball_min_circularity, 0.01, 1.0),
+        ball_plate_inner_scale=clamp(config.ball_plate_inner_scale, 0.1, 1.2),
     )
 
 
@@ -303,9 +871,45 @@ def motion_config_from_args(args: argparse.Namespace) -> MotionConfig:
         angle_limit_deg=args.balance_angle_limit_deg,
         angle_gain_deg=args.balance_angle_gain_deg,
         angle_derivative_gain_deg=args.balance_angle_d_gain_deg,
+        tangent_damping_deg=args.balance_tangent_d_gain_deg,
+        delay_compensation_sec=args.balance_delay_compensation_sec,
+        target_offset_x=args.balance_target_offset_x,
+        target_offset_y=args.balance_target_offset_y,
         camera_to_plate_yaw_deg=args.camera_to_plate_yaw_deg,
         filter_alpha=args.balance_filter_alpha,
         max_measurement_age_sec=args.balance_max_measurement_age_sec,
+        velocity_window_size=args.balance_velocity_window_size,
+        center_radius=args.balance_center_radius,
+        center_exit_radius=args.balance_center_exit_radius,
+        center_speed_enter_velocity=args.balance_center_speed_enter_velocity,
+        center_speed_exit_velocity=args.balance_center_speed_exit_velocity,
+        center_angle_limit_deg=args.balance_center_angle_limit_deg,
+        center_position_scale=args.balance_center_position_scale,
+        center_radial_damping_deg=args.balance_center_radial_d_gain_deg,
+        center_tangent_damping_deg=args.balance_center_tangent_d_gain_deg,
+        recovery_radius=args.balance_recovery_radius,
+        recovery_exit_radius=args.balance_recovery_exit_radius,
+        recovery_tangent_enter_velocity=(
+            args.balance_recovery_tangent_enter_velocity
+        ),
+        recovery_tangent_exit_velocity=(
+            args.balance_recovery_tangent_exit_velocity
+        ),
+        recovery_radial_exit_velocity=(
+            args.balance_recovery_radial_exit_velocity
+        ),
+        recovery_speed_exit_velocity=(
+            args.balance_recovery_speed_exit_velocity
+        ),
+        recovery_radial_gain_deg=args.balance_recovery_radial_gain_deg,
+        recovery_radial_damping_deg=(
+            args.balance_recovery_radial_d_gain_deg
+        ),
+        recovery_tangent_damping_deg=(
+            args.balance_recovery_tangent_d_gain_deg
+        ),
+        recovery_angle_limit_deg=args.balance_recovery_angle_limit_deg,
+        tilt_rate_limit_deg_s=args.balance_tilt_rate_limit_deg_s,
         velocity_scale=args.motion_velocity_scale,
         acceleration_scale=args.motion_acceleration_scale,
         servol_rate_hz=args.servol_rate_hz,
@@ -338,6 +942,7 @@ class BallBalanceNode(Node):
         self.latest_frame = None
         self.latest_stamp = None
         self.latest_joint_state = None
+        self.config_lock = threading.Lock()
         self.latest_fps = 0.0
         self.frame_count = 0
         self.frame_times = deque(maxlen=90)
@@ -409,6 +1014,18 @@ class BallBalanceNode(Node):
         with self.frame_lock:
             return self.latest_joint_state
 
+    def get_detection_config(self) -> DetectionConfig:
+        """Return the latest detector configuration."""
+        with self.config_lock:
+            return self.detector_config
+
+    def update_detection_config(self, **changes) -> None:
+        """Replace detector configuration fields at runtime."""
+        with self.config_lock:
+            config = replace(self.detector_config, **changes)
+            config = normalize_detection_config(config)
+            self.detector_config = config
+
 
 class FrameCapture:
     """Save raw image frames while capture is active."""
@@ -443,6 +1060,340 @@ class FrameCapture:
             self.saved_count += 1
 
 
+class TuningPanel:
+    """OpenCV trackbar panel for runtime detector and controller tuning."""
+
+    width = 1260
+    height = 760
+    margin = 18
+    column_gap = 22
+    row_height = 38
+    header_height = 52
+
+    def __init__(
+        self,
+        window_name: str,
+        detection_config: DetectionConfig,
+        motion_config: MotionConfig,
+    ) -> None:
+        """Create the tuning window and initialize all sliders."""
+        self.window_name = window_name
+        self.specs = TRACKBAR_SPECS
+        self.last_positions: dict[str, int] = {}
+        self.positions: dict[str, int] = {}
+        self.slider_boxes: dict[str, tuple[int, int, int, int]] = {}
+        self.dragging_spec: TrackbarSpec | None = None
+        self.columns = [
+            ("Motion", [spec for spec in self.specs
+                        if spec.group == "motion"
+                        and not spec.name.startswith(("center", "edge"))]),
+            ("Center / Edge", [spec for spec in self.specs
+                               if spec.group == "motion"
+                               and spec.name.startswith(("center", "edge"))]),
+            ("Detection", [spec for spec in self.specs
+                           if spec.group == "detection"]),
+        ]
+        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.window_name, self.width, self.height)
+        cv2.setMouseCallback(self.window_name, self._on_mouse)
+        for spec in self.specs:
+            value = self._read_config_value(
+                spec,
+                detection_config,
+                motion_config,
+            )
+            position = spec.value_to_position(value)
+            self.positions[spec.name] = position
+            self.last_positions[spec.name] = position
+
+    def sync_to_node(self, node: BallBalanceNode) -> None:
+        """Apply changed trackbar values to runtime configs."""
+        detection_changes = {}
+        motion_changes = {}
+        for spec in self.specs:
+            position = self.positions.get(spec.name)
+            if position is None:
+                continue
+            if position == self.last_positions.get(spec.name):
+                continue
+            self.last_positions[spec.name] = position
+            value = spec.position_to_value(position)
+            if spec.group == "detection":
+                detection_changes[spec.field] = value
+            elif spec.group == "motion":
+                motion_changes[spec.field] = value
+        if detection_changes:
+            node.update_detection_config(**detection_changes)
+            self._sync_positions(node.get_detection_config(),
+                                 node.motion.snapshot()["config"])
+        if motion_changes:
+            node.motion.update_config(**motion_changes)
+            self._sync_positions(node.get_detection_config(),
+                                 node.motion.snapshot()["config"])
+
+    def draw_values(
+        self,
+        detection_config: DetectionConfig,
+        motion_config: MotionConfig,
+    ) -> None:
+        """Show a compact multi-column slider panel in the tuning window."""
+        image = np.full(
+            (self.height, self.width, 3),
+            (245, 248, 246),
+            dtype=np.uint8,
+        )
+        self.slider_boxes = {}
+        cv2.putText(
+            image,
+            "Ball Balance Tuning",
+            (self.margin, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.72,
+            (18, 112, 82),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            "drag sliders; values apply live",
+            (self.margin, 48),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40,
+            (90, 112, 104),
+            1,
+            cv2.LINE_AA,
+        )
+        column_width = (
+            self.width
+            - 2 * self.margin
+            - self.column_gap * (len(self.columns) - 1)
+        ) // len(self.columns)
+        for column_index, (title, specs) in enumerate(self.columns):
+            x = self.margin + column_index * (
+                column_width + self.column_gap
+            )
+            self._draw_column(
+                image,
+                title,
+                specs,
+                x,
+                self.header_height,
+                column_width,
+            )
+        cv2.imshow(self.window_name, image)
+
+    def _sync_positions(
+        self,
+        detection_config: DetectionConfig,
+        motion_config: MotionConfig,
+    ) -> None:
+        """Move trackbars back to normalized config values when clamped."""
+        for spec in self.specs:
+            value = self._read_config_value(
+                spec,
+                detection_config,
+                motion_config,
+            )
+            position = spec.value_to_position(value)
+            if position == self.last_positions.get(spec.name):
+                continue
+            self.positions[spec.name] = position
+            self.last_positions[spec.name] = position
+
+    def _read_config_value(
+        self,
+        spec: TrackbarSpec,
+        detection_config: DetectionConfig,
+        motion_config: MotionConfig,
+    ) -> float:
+        """Read one parameter value from the matching config object."""
+        if spec.group == "detection":
+            return float(getattr(detection_config, spec.field))
+        return float(getattr(motion_config, spec.field))
+
+    def _draw_column(
+        self,
+        image: np.ndarray,
+        title: str,
+        specs: list[TrackbarSpec],
+        x: int,
+        y: int,
+        width: int,
+    ) -> None:
+        """Draw one column of custom sliders."""
+        cv2.rectangle(
+            image,
+            (x, y - 8),
+            (x + width, self.height - self.margin),
+            (230, 238, 234),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            title,
+            (x + 10, y + 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            (36, 54, 48),
+            2,
+            cv2.LINE_AA,
+        )
+        row_y = y + 46
+        for spec in specs:
+            self._draw_slider(image, spec, x + 10, row_y, width - 20)
+            row_y += self.row_height
+
+    def _draw_slider(
+        self,
+        image: np.ndarray,
+        spec: TrackbarSpec,
+        x: int,
+        y: int,
+        width: int,
+    ) -> None:
+        """Draw one slider row and remember its hit box."""
+        dark = (36, 54, 48)
+        muted = (90, 112, 104)
+        accent = (18, 112, 82)
+        active = spec == self.dragging_spec
+        position = self.positions.get(spec.name, 0)
+        value = spec.position_to_value(position)
+        cv2.putText(
+            image,
+            spec.name,
+            (x, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.38,
+            accent if active else dark,
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            self._format_slider_value(spec, value),
+            (x + width - 76, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.38,
+            dark,
+            1,
+            cv2.LINE_AA,
+        )
+        slider_y = y + 12
+        slider_x0 = x
+        slider_x1 = x + width
+        fraction = 0.0
+        if spec.max_position > 0:
+            fraction = clamp(position / spec.max_position, 0.0, 1.0)
+        knob_x = int(round(slider_x0 + fraction * (slider_x1 - slider_x0)))
+        cv2.line(
+            image,
+            (slider_x0, slider_y),
+            (slider_x1, slider_y),
+            (196, 209, 203),
+            4,
+            cv2.LINE_AA,
+        )
+        cv2.line(
+            image,
+            (slider_x0, slider_y),
+            (knob_x, slider_y),
+            accent,
+            4,
+            cv2.LINE_AA,
+        )
+        cv2.circle(
+            image,
+            (knob_x, slider_y),
+            7 if active else 6,
+            accent,
+            -1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            f"{spec.minimum:g}",
+            (slider_x0, slider_y + 19),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.30,
+            muted,
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            f"{spec.maximum:g}",
+            (slider_x1 - 36, slider_y + 19),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.30,
+            muted,
+            1,
+            cv2.LINE_AA,
+        )
+        self.slider_boxes[spec.name] = (
+            slider_x0,
+            slider_y - 12,
+            slider_x1,
+            slider_y + 16,
+        )
+
+    def _format_slider_value(
+        self,
+        spec: TrackbarSpec,
+        value: float | int,
+    ) -> str:
+        """Format a slider value compactly."""
+        if spec.is_int:
+            return str(int(value))
+        if abs(float(value)) >= 100.0:
+            return f"{float(value):.0f}"
+        if abs(float(value)) >= 10.0:
+            return f"{float(value):.1f}"
+        return f"{float(value):.2f}"
+
+    def _on_mouse(
+        self,
+        event: int,
+        x: int,
+        y: int,
+        flags: int,
+        _userdata,
+    ) -> None:
+        """Handle mouse dragging for the custom slider panel."""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.dragging_spec = self._spec_at(x, y)
+            if self.dragging_spec is not None:
+                self._set_slider_from_x(self.dragging_spec, x)
+        elif (
+            event == cv2.EVENT_MOUSEMOVE
+            and self.dragging_spec is not None
+            and flags & cv2.EVENT_FLAG_LBUTTON
+        ):
+            self._set_slider_from_x(self.dragging_spec, x)
+        elif event == cv2.EVENT_LBUTTONUP:
+            self.dragging_spec = None
+
+    def _spec_at(self, x: int, y: int) -> TrackbarSpec | None:
+        """Return the slider spec under the mouse cursor."""
+        for spec in self.specs:
+            box = self.slider_boxes.get(spec.name)
+            if box is None:
+                continue
+            x0, y0, x1, y1 = box
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                return spec
+        return None
+
+    def _set_slider_from_x(self, spec: TrackbarSpec, x: int) -> None:
+        """Update one slider position from the mouse x coordinate."""
+        box = self.slider_boxes.get(spec.name)
+        if box is None:
+            return
+        x0, _y0, x1, _y1 = box
+        fraction = clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
+        self.positions[spec.name] = int(round(fraction * spec.max_position))
+
+
 class ControlLogger:
     """Write visual, control, and robot state rows to a CSV file."""
 
@@ -452,6 +1403,8 @@ class ControlLogger:
         self.path = session_dir / "control_log.csv"
         self.file = None
         self.writer = None
+        self.last_flush_time = time.monotonic()
+        self.flush_interval_sec = 0.5
         if not self.enabled:
             return
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -491,18 +1444,24 @@ class ControlLogger:
         ):
             return
         snapshot = motion.snapshot()
+        config = snapshot.get("config", motion.config)
         row = build_control_log_row(
             frame_count,
             fps,
             stamp,
             detection,
-            motion.config,
+            config,
             snapshot,
             joint_state,
         )
         self.writer.writerow(row)
-        if self.file is not None:
+        now = time.monotonic()
+        if (
+            self.file is not None
+            and now - self.last_flush_time >= self.flush_interval_sec
+        ):
             self.file.flush()
+            self.last_flush_time = now
 
 
 def control_log_fields() -> list[str]:
@@ -531,16 +1490,49 @@ def control_log_fields() -> list[str]:
         "filtered_offset_y",
         "filtered_velocity_x",
         "filtered_velocity_y",
+        "control_offset_x",
+        "control_offset_y",
         "measurement_age_sec",
         "kp_deg",
         "kd_deg",
+        "tangent_damping_deg",
         "angle_limit_deg",
+        "lead_time_sec",
         "filter_alpha",
+        "velocity_window_size",
+        "center_radius",
+        "center_exit_radius",
+        "center_speed_enter_velocity",
+        "center_speed_exit_velocity",
+        "center_angle_limit_deg",
+        "center_position_scale",
+        "center_radial_damping_deg",
+        "center_tangent_damping_deg",
+        "recovery_radius",
+        "recovery_exit_radius",
+        "recovery_tangent_enter_velocity",
+        "recovery_tangent_exit_velocity",
+        "recovery_radial_exit_velocity",
+        "recovery_speed_exit_velocity",
+        "recovery_radial_gain_deg",
+        "recovery_radial_damping_deg",
+        "recovery_tangent_damping_deg",
+        "recovery_angle_limit_deg",
+        "tilt_rate_limit_deg_s",
         "camera_to_plate_yaw_deg",
         "servol_rate_hz",
         "servol_active",
         "control_source",
+        "control_mode",
         "control_stale",
+        "control_radius",
+        "control_radial_velocity",
+        "control_tangent_velocity",
+        "control_speed",
+        "control_radial_command",
+        "control_tangent_command",
+        "control_radial_scale",
+        "control_effective_limit_deg",
         "tilt_x_deg",
         "tilt_y_deg",
         "motion_busy",
@@ -595,6 +1587,11 @@ def build_control_log_row(
         None,
         None,
     )
+    control_offset = motion_snapshot.get("last_control_offset") or (
+        None,
+        None,
+    )
+    control_state = motion_snapshot.get("last_control_state")
     row = {
         "wall_time_sec": time.time(),
         "frame_count": frame_count,
@@ -611,24 +1608,89 @@ def build_control_log_row(
         "ball_radius_px": detection.ball.radius,
         "raw_offset_x": raw_offset[0],
         "raw_offset_y": raw_offset[1],
-        "target_offset_x": 0.0,
-        "target_offset_y": 0.0,
+        "target_offset_x": config.target_offset_x,
+        "target_offset_y": config.target_offset_y,
         "plate_offset_x": plate_offset[0],
         "plate_offset_y": plate_offset[1],
         "filtered_offset_x": filtered_offset[0],
         "filtered_offset_y": filtered_offset[1],
         "filtered_velocity_x": filtered_velocity[0],
         "filtered_velocity_y": filtered_velocity[1],
+        "control_offset_x": control_offset[0],
+        "control_offset_y": control_offset[1],
         "measurement_age_sec": motion_snapshot.get("measurement_age_sec"),
         "kp_deg": config.angle_gain_deg,
         "kd_deg": config.angle_derivative_gain_deg,
+        "tangent_damping_deg": config.tangent_damping_deg,
         "angle_limit_deg": config.angle_limit_deg,
+        "lead_time_sec": config.delay_compensation_sec,
         "filter_alpha": config.filter_alpha,
+        "velocity_window_size": config.velocity_window_size,
+        "center_radius": config.center_radius,
+        "center_exit_radius": config.center_exit_radius,
+        "center_speed_enter_velocity": config.center_speed_enter_velocity,
+        "center_speed_exit_velocity": config.center_speed_exit_velocity,
+        "center_angle_limit_deg": config.center_angle_limit_deg,
+        "center_position_scale": config.center_position_scale,
+        "center_radial_damping_deg": config.center_radial_damping_deg,
+        "center_tangent_damping_deg": config.center_tangent_damping_deg,
+        "recovery_radius": config.recovery_radius,
+        "recovery_exit_radius": config.recovery_exit_radius,
+        "recovery_tangent_enter_velocity": (
+            config.recovery_tangent_enter_velocity
+        ),
+        "recovery_tangent_exit_velocity": (
+            config.recovery_tangent_exit_velocity
+        ),
+        "recovery_radial_exit_velocity": (
+            config.recovery_radial_exit_velocity
+        ),
+        "recovery_speed_exit_velocity": (
+            config.recovery_speed_exit_velocity
+        ),
+        "recovery_radial_gain_deg": config.recovery_radial_gain_deg,
+        "recovery_radial_damping_deg": (
+            config.recovery_radial_damping_deg
+        ),
+        "recovery_tangent_damping_deg": (
+            config.recovery_tangent_damping_deg
+        ),
+        "recovery_angle_limit_deg": config.recovery_angle_limit_deg,
+        "tilt_rate_limit_deg_s": config.tilt_rate_limit_deg_s,
         "camera_to_plate_yaw_deg": config.camera_to_plate_yaw_deg,
         "servol_rate_hz": config.servol_rate_hz,
         "servol_active": motion_snapshot.get("servol_active"),
         "control_source": motion_snapshot.get("last_control_source"),
+        "control_mode": getattr(control_state, "mode", ""),
         "control_stale": motion_snapshot.get("last_measurement_stale"),
+        "control_radius": getattr(control_state, "radius", ""),
+        "control_radial_velocity": getattr(
+            control_state,
+            "radial_velocity",
+            "",
+        ),
+        "control_tangent_velocity": getattr(
+            control_state,
+            "tangent_velocity",
+            "",
+        ),
+        "control_speed": getattr(control_state, "speed", ""),
+        "control_radial_command": getattr(
+            control_state,
+            "radial_command",
+            "",
+        ),
+        "control_tangent_command": getattr(
+            control_state,
+            "tangent_command",
+            "",
+        ),
+        "control_radial_scale": getattr(control_state, "radial_scale", ""),
+        "control_effective_limit_deg": getattr(
+            control_state,
+            "effective_limit_deg",
+            "",
+        ),
         "tilt_x_deg": motion_snapshot.get("last_tilt_x_deg"),
         "tilt_y_deg": motion_snapshot.get("last_tilt_y_deg"),
         "motion_busy": motion_snapshot.get("busy"),
@@ -734,12 +1796,13 @@ def draw_detection(
     frame: np.ndarray,
     detection: BallBalanceDetection,
     config: DetectionConfig,
-    camera_to_plate_yaw_deg: float,
+    motion_config: MotionConfig,
 ) -> None:
     """Draw plate and ball detections on the frame."""
     draw_plate_roi(frame, config)
     if detection.plate is not None:
         draw_circle_detection(frame, detection.plate, (0, 0, 255), "plate")
+        draw_target_offset(frame, detection.plate, motion_config)
     if detection.ball is not None:
         draw_circle_detection(frame, detection.ball, (0, 220, 0), "ball")
     if detection.plate is not None and detection.ball is not None:
@@ -765,8 +1828,43 @@ def draw_detection(
         draw_yaw_compensation_overlay(
             frame,
             detection,
-            camera_to_plate_yaw_deg,
+            motion_config.camera_to_plate_yaw_deg,
         )
+
+
+def draw_target_offset(
+    frame: np.ndarray,
+    plate: CircleDetection,
+    motion_config: MotionConfig,
+) -> None:
+    """Draw the configured balance target point on the plate."""
+    target_point = offset_to_image_point(
+        plate.center,
+        plate.radius,
+        compensate_offset(
+            (motion_config.target_offset_x, motion_config.target_offset_y),
+            -motion_config.camera_to_plate_yaw_deg,
+        ),
+    )
+    point = round_point(target_point)
+    cv2.drawMarker(
+        frame,
+        point,
+        (255, 80, 255),
+        markerType=cv2.MARKER_TILTED_CROSS,
+        markerSize=18,
+        thickness=2,
+    )
+    cv2.putText(
+        frame,
+        "target",
+        (point[0] + 8, point[1] - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.42,
+        (255, 80, 255),
+        1,
+        cv2.LINE_AA,
+    )
 
 
 def draw_yaw_compensation_overlay(
@@ -906,7 +2004,7 @@ def build_status_lines(
     stamp,
     detection: BallBalanceDetection,
     motion: BallBalanceMotionController,
-    camera_to_plate_yaw_deg: float,
+    motion_config: MotionConfig,
 ) -> list[str]:
     """Build the text lines displayed in the preview."""
     stamp_text = (
@@ -931,12 +2029,19 @@ def build_status_lines(
         dx, dy = detection.offset
         plate_dx, plate_dy = compensate_offset(
             detection.offset,
-            camera_to_plate_yaw_deg,
+            motion_config.camera_to_plate_yaw_deg,
         )
         lines.append(f"raw offset: x={dx:+.3f}, y={dy:+.3f}")
         lines.append(
             f"plate offset: x={plate_dx:+.3f}, y={plate_dy:+.3f}, "
-            f"yaw={camera_to_plate_yaw_deg:+.1f}deg"
+            f"yaw={motion_config.camera_to_plate_yaw_deg:+.1f}deg"
+        )
+        lines.append(
+            "target/error: "
+            f"tx={motion_config.target_offset_x:+.3f} "
+            f"ty={motion_config.target_offset_y:+.3f} "
+            f"ex={plate_dx - motion_config.target_offset_x:+.3f} "
+            f"ey={plate_dy - motion_config.target_offset_y:+.3f}"
         )
     lines.extend(motion.status_lines())
     return lines
@@ -962,15 +2067,15 @@ def build_debug_panel(detection: BallBalanceDetection) -> np.ndarray | None:
     if debug is None:
         return None
     tiles = [
-        make_debug_tile("01 gray", debug.gray),
+        make_debug_tile("01 value", debug.gray),
         make_debug_tile("02 roi", debug.roi_mask),
-        make_debug_tile("03 edges", debug.edge_mask),
-        make_debug_tile("04 plate", debug.plate_mask),
+        make_debug_tile("03 green raw", debug.edge_mask),
+        make_debug_tile("04 green plate", debug.plate_mask),
     ]
     if debug.ball_mask is not None:
-        tiles.append(make_debug_tile("05 ball", debug.ball_mask))
+        tiles.append(make_debug_tile("05 red ball", debug.ball_mask))
     else:
-        tiles.append(make_blank_debug_tile("05 ball"))
+        tiles.append(make_blank_debug_tile("05 red ball"))
     if len(tiles) % 2 != 0:
         tiles.append(make_blank_debug_tile(""))
     return tile_debug_images(tiles, columns=2)
@@ -1103,66 +2208,102 @@ def run_preview(node: BallBalanceNode) -> int:
     """Run the OpenCV preview loop while spinning the ROS node."""
     cv2.namedWindow(node.window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(node.window_name, node.display_width, node.display_height)
+    tuning_panel = TuningPanel(
+        TUNING_WINDOW_NAME,
+        node.get_detection_config(),
+        node.motion.snapshot()["config"],
+    )
     node.get_logger().info("Press q or Esc in the preview window to exit.")
+    spin_stop_event = threading.Event()
+    spin_thread = threading.Thread(
+        target=spin_node_until_stopped,
+        args=(node, spin_stop_event),
+        name="easyarm_ball_balance_spin",
+        daemon=True,
+    )
+    spin_thread.start()
     last_measurement_frame_count = 0
+    last_processed_frame_count = 0
+    last_detection = None
+    last_tuning_draw_time = 0.0
+    try:
+        while rclpy.ok():
+            tuning_panel.sync_to_node(node)
+            now = time.monotonic()
+            detection_config = node.get_detection_config()
+            motion_config = node.motion.snapshot()["config"]
+            if now - last_tuning_draw_time >= 0.1:
+                tuning_panel.draw_values(detection_config, motion_config)
+                last_tuning_draw_time = now
 
-    while rclpy.ok():
-        rclpy.spin_once(node, timeout_sec=0.01)
-        frame, stamp, frame_count, fps = node.get_frame()
-        if frame is None:
-            key = cv2.waitKey(10) & 0xFF
-            if key in (27, ord("q")):
-                return 0
-            handle_key(node, key, None)
-            continue
+            frame, stamp, frame_count, fps = node.get_frame()
+            if frame is None or frame_count == last_processed_frame_count:
+                key = cv2.waitKey(1) & 0xFF
+                if key in (27, ord("q")):
+                    return 0
+                handle_key(node, key, last_detection)
+                continue
 
-        node.capture.save(frame, frame_count)
-        source_size = (frame.shape[1], frame.shape[0])
-        preview = resize_frame(
-            frame,
-            node.display_width,
-            node.display_height,
-        )
-        detection = detect_objects(preview, node.detector_config)
-        draw_detection(
-            preview,
-            detection,
-            node.detector_config,
-            node.motion.config.camera_to_plate_yaw_deg,
-        )
-        set_last_preview_frame(preview)
-        if frame_count != last_measurement_frame_count:
-            node.motion.update_measurement(detection.offset)
-            last_measurement_frame_count = frame_count
-            node.control_logger.write(
+            last_processed_frame_count = frame_count
+            node.capture.save(frame, frame_count)
+            source_size = (frame.shape[1], frame.shape[0])
+            preview = resize_frame(
+                frame,
+                node.display_width,
+                node.display_height,
+            )
+            detection = detect_objects(preview, detection_config)
+            last_detection = detection
+            draw_detection(
+                preview,
+                detection,
+                detection_config,
+                motion_config,
+            )
+            set_last_preview_frame(preview)
+            if frame_count != last_measurement_frame_count:
+                node.motion.update_measurement(detection.offset)
+                last_measurement_frame_count = frame_count
+                node.control_logger.write(
+                    frame_count,
+                    fps,
+                    stamp,
+                    detection,
+                    node.motion,
+                    node.get_joint_state(),
+                )
+            status_lines = build_status_lines(
                 frame_count,
                 fps,
+                source_size,
                 stamp,
                 detection,
                 node.motion,
-                node.get_joint_state(),
+                motion_config,
             )
-        status_lines = build_status_lines(
-            frame_count,
-            fps,
-            source_size,
-            stamp,
-            detection,
-            node.motion,
-            node.motion.config.camera_to_plate_yaw_deg,
-        )
-        draw_text_lines(preview, status_lines, (14, 28))
-        cv2.imshow(node.window_name, preview)
-        if node.debug_mask:
-            show_debug_masks(detection)
-            show_candidate_debug(preview, detection)
+            draw_text_lines(preview, status_lines, (14, 28))
+            cv2.imshow(node.window_name, preview)
+            if node.debug_mask:
+                show_debug_masks(detection)
+                show_candidate_debug(preview, detection)
 
-        key = cv2.waitKey(1) & 0xFF
-        if key in (27, ord("q")):
-            return 0
-        handle_key(node, key, detection)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (27, ord("q")):
+                return 0
+            handle_key(node, key, detection)
+        return 0
+    finally:
+        spin_stop_event.set()
+        spin_thread.join(timeout=1.0)
 
-    return 0
+
+def spin_node_until_stopped(
+    node: BallBalanceNode,
+    stop_event: threading.Event,
+) -> None:
+    """Spin ROS callbacks in the background so UI work cannot block them."""
+    while rclpy.ok() and not stop_event.is_set():
+        rclpy.spin_once(node, timeout_sec=0.02)
 
 
 def handle_key(
@@ -1226,6 +2367,80 @@ def main() -> int:
         raise SystemExit("--balance-filter-alpha must be in (0, 1]")
     if args.balance_max_measurement_age_sec <= 0.0:
         raise SystemExit("--balance-max-measurement-age-sec must be positive")
+    if args.balance_delay_compensation_sec < 0.0:
+        raise SystemExit(
+            "--balance-delay-compensation-sec must be nonnegative"
+        )
+    if not -1.0 <= args.balance_target_offset_x <= 1.0:
+        raise SystemExit("--balance-target-offset-x must be in [-1, 1]")
+    if not -1.0 <= args.balance_target_offset_y <= 1.0:
+        raise SystemExit("--balance-target-offset-y must be in [-1, 1]")
+    if args.balance_velocity_window_size < 2:
+        raise SystemExit("--balance-velocity-window-size must be >= 2")
+    if args.balance_center_radius <= 0.0:
+        raise SystemExit("--balance-center-radius must be positive")
+    if args.balance_center_exit_radius < args.balance_center_radius:
+        raise SystemExit(
+            "--balance-center-exit-radius must be >= "
+            "--balance-center-radius"
+        )
+    if args.balance_center_speed_exit_velocity < 0.0:
+        raise SystemExit(
+            "--balance-center-speed-exit-velocity must be nonnegative"
+        )
+    if (
+        args.balance_center_speed_enter_velocity
+        < args.balance_center_speed_exit_velocity
+    ):
+        raise SystemExit(
+            "--balance-center-speed-enter-velocity must be >= "
+            "--balance-center-speed-exit-velocity"
+        )
+    if args.balance_center_angle_limit_deg <= 0.0:
+        raise SystemExit("--balance-center-angle-limit-deg must be positive")
+    if not 0.0 <= args.balance_center_position_scale <= 1.0:
+        raise SystemExit(
+            "--balance-center-position-scale must be in [0, 1]"
+        )
+    if args.balance_center_radial_d_gain_deg < 0.0:
+        raise SystemExit(
+            "--balance-center-radial-d-gain-deg must be nonnegative"
+        )
+    if args.balance_center_tangent_d_gain_deg < 0.0:
+        raise SystemExit(
+            "--balance-center-tangent-d-gain-deg must be nonnegative"
+        )
+    if args.balance_recovery_radius <= args.balance_recovery_exit_radius:
+        raise SystemExit(
+            "--balance-recovery-radius must be greater than "
+            "--balance-recovery-exit-radius"
+        )
+    if args.balance_recovery_tangent_enter_velocity < 0.0:
+        raise SystemExit(
+            "--balance-recovery-tangent-enter-velocity must be nonnegative"
+        )
+    if args.balance_recovery_tangent_exit_velocity < 0.0:
+        raise SystemExit(
+            "--balance-recovery-tangent-exit-velocity must be nonnegative"
+        )
+    if args.balance_recovery_radial_exit_velocity < 0.0:
+        raise SystemExit(
+            "--balance-recovery-radial-exit-velocity must be nonnegative"
+        )
+    if args.balance_recovery_speed_exit_velocity < 0.0:
+        raise SystemExit(
+            "--balance-recovery-speed-exit-velocity must be nonnegative"
+        )
+    if args.balance_tangent_d_gain_deg < 0.0:
+        raise SystemExit("--balance-tangent-d-gain-deg must be nonnegative")
+    if args.balance_recovery_angle_limit_deg <= 0.0:
+        raise SystemExit(
+            "--balance-recovery-angle-limit-deg must be positive"
+        )
+    if args.balance_tilt_rate_limit_deg_s < 0.0:
+        raise SystemExit(
+            "--balance-tilt-rate-limit-deg-s must be nonnegative"
+        )
 
     rclpy.init()
     node = BallBalanceNode(args)

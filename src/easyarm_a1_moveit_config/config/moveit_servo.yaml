@@ -10,7 +10,7 @@ command_in_type: "speed_units"
 
 scale:
   linear: 0.05
-  rotational: 0.3
+  rotational: 0.6
   joint: 0.3
 
 # Use MoveIt Servo's internal scaling around singularities and collisions.

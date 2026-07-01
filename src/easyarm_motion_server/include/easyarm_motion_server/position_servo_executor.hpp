@@ -134,11 +134,11 @@ private:
   double servoj_target_jump_rad_{0.5};
   double servoj_goal_tolerance_rad_{0.005};
   double servol_linear_kp_{20.0};
-  double servol_angular_kp_{12.0};
+  double servol_angular_kp_{25.0};
   double servol_max_linear_velocity_m_s_{2.0};
   double servol_max_linear_acceleration_m_s2_{6.0};
-  double servol_max_angular_velocity_rad_s_{10.0};
-  double servol_max_angular_acceleration_rad_s2_{30.0};
+  double servol_max_angular_velocity_rad_s_{30.0};
+  double servol_max_angular_acceleration_rad_s2_{80.0};
   double servol_target_jump_m_{0.2};
   double servol_target_jump_rad_{1.0};
   double servol_position_tolerance_m_{0.001};

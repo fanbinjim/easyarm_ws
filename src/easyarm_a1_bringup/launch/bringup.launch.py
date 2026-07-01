@@ -36,7 +36,7 @@ def generate_launch_description():
     camera_pointcloud = LaunchConfiguration("camera_pointcloud", default="false")
     camera_enable_sync = LaunchConfiguration("camera_enable_sync", default="true")
     camera_publish_tf = LaunchConfiguration("camera_publish_tf", default="false")
-    camera_color_profile = LaunchConfiguration("camera_color_profile", default="640x480x30")
+    camera_color_profile = LaunchConfiguration("camera_color_profile", default="640x480x60")
     web_backend_host = LaunchConfiguration("web_backend_host", default="0.0.0.0")
     web_backend_port = LaunchConfiguration("web_backend_port", default="8000")
     web_token = LaunchConfiguration("web_token", default="easyarm")

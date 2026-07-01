@@ -22,6 +22,10 @@ setup(
     entry_points={
         'console_scripts': [
             'easyarm_ball_balance = easyarm_task.ball_balance:main',
+            (
+                'easyarm_ball_balance_color_benchmark = '
+                'easyarm_task.ball_balance_color_benchmark:main'
+            ),
         ],
     },
 )
