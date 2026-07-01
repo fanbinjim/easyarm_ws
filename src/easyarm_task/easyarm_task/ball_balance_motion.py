@@ -40,6 +40,10 @@ class MotionConfig:
     angle_gain_deg: float
     angle_derivative_gain_deg: float
     tangent_damping_deg: float
+    integral_gain_deg: float
+    integral_limit_deg: float
+    integral_radius: float
+    integral_speed: float
     delay_compensation_sec: float
     target_offset_x: float
     target_offset_y: float
@@ -128,6 +132,10 @@ class BallBalanceMotionController:
         self.last_target_pose = None
         self.last_control_offset: tuple[float, float] | None = None
         self.last_control_state = BalanceControlState()
+        self.integral_trim_x_deg = 0.0
+        self.integral_trim_y_deg = 0.0
+        self.integral_active = False
+        self.last_integral_time: float | None = None
         self.servol_thread = threading.Thread(
             target=self._servol_loop,
             name="easyarm_ball_balance_servol",
@@ -147,6 +155,9 @@ class BallBalanceMotionController:
             filtered_velocity = self.filtered_velocity
             control_state = self.last_control_state
             last_measurement_time = self.last_measurement_time
+            integral_trim_x_deg = self.integral_trim_x_deg
+            integral_trim_y_deg = self.integral_trim_y_deg
+            integral_active = self.integral_active
         lines = [
             f"origin: {origin}",
             f"motion: {self.status}",
@@ -174,6 +185,12 @@ class BallBalanceMotionController:
                 f"vr={control_state.radial_velocity:+.2f} "
                 f"vt={control_state.tangent_velocity:+.2f} "
                 f"lim={control_state.effective_limit_deg:.1f}"
+            )
+            lines.append(
+                "i trim: "
+                f"x={integral_trim_x_deg:+.2f}deg "
+                f"y={integral_trim_y_deg:+.2f}deg "
+                f"{'on' if integral_active else 'hold'}"
             )
         state = "active" if servol_active else "stopped"
         lines.append(f"servol: {state} {self.config.servol_rate_hz:.0f}Hz")
@@ -206,6 +223,9 @@ class BallBalanceMotionController:
                 "last_target_pose": self.last_target_pose,
                 "last_control_offset": self.last_control_offset,
                 "last_control_state": self.last_control_state,
+                "integral_trim_x_deg": self.integral_trim_x_deg,
+                "integral_trim_y_deg": self.integral_trim_y_deg,
+                "integral_active": self.integral_active,
                 "config": config,
             }
 
@@ -216,6 +236,7 @@ class BallBalanceMotionController:
                 self.config,
                 **changes,
             ))
+            self._clamp_integral_trim_locked()
             self.measurement_history = deque(
                 self.measurement_history,
                 maxlen=max(2, self.config.velocity_window_size),
@@ -338,6 +359,7 @@ class BallBalanceMotionController:
             self.servol_active = True
             self.servol_return_samples = 0
             self.last_tilt_time = None
+            self.last_integral_time = None
             self.measurement_history.clear()
             if (
                 self.filtered_offset is not None
@@ -368,6 +390,8 @@ class BallBalanceMotionController:
             self.last_tilt_x_deg = 0.0
             self.last_tilt_y_deg = 0.0
             self.last_tilt_time = None
+            self.last_integral_time = None
+            self.integral_active = False
             self.last_command_sent = True
             self.last_control_source = "servol_stop"
             self.last_control_offset = (0.0, 0.0)
@@ -394,6 +418,14 @@ class BallBalanceMotionController:
             target_y = self.config.target_offset_y
         offset_x, offset_y = compensate_offset(offset, yaw_deg)
         return offset_x - target_x, offset_y - target_y
+
+    def reset_integral_trim(self) -> None:
+        """Clear the learned attitude trim."""
+        with self.state_lock:
+            self.integral_trim_x_deg = 0.0
+            self.integral_trim_y_deg = 0.0
+            self.integral_active = False
+            self.last_integral_time = None
 
     def update_measurement(self, offset: tuple[float, float] | None) -> None:
         """Store the latest visual offset and fit normalized velocity."""
@@ -516,6 +548,10 @@ class BallBalanceMotionController:
             return
         with self.state_lock:
             self.origin_pose = response.pose
+            self.integral_trim_x_deg = 0.0
+            self.integral_trim_y_deg = 0.0
+            self.integral_active = False
+            self.last_integral_time = None
         pose = response.pose.pose
         position = pose.position
         self._finish_ok(
@@ -587,13 +623,15 @@ class BallBalanceMotionController:
                     > config.max_measurement_age_sec
                 )
                 if measurement_stale:
-                    tilt_x_deg = 0.0
-                    tilt_y_deg = 0.0
+                    tilt_x_deg = self.integral_trim_x_deg
+                    tilt_y_deg = self.integral_trim_y_deg
                     control_offset = (0.0, 0.0)
                     control_state = BalanceControlState(
                         mode="stale",
                     )
-                    control_source = "servol_stale_origin"
+                    self.integral_active = False
+                    self.last_integral_time = None
+                    control_source = "servol_stale_trim"
                 else:
                     control_offset = predict_offset(
                         offset,
@@ -608,6 +646,33 @@ class BallBalanceMotionController:
                         offset,
                         velocity,
                         config,
+                    )
+                    trim_x_deg, trim_y_deg = (
+                        self._update_integral_trim_locked(
+                            offset,
+                            velocity,
+                            now,
+                        )
+                    )
+                    tilt_x_deg += trim_x_deg
+                    tilt_y_deg += trim_y_deg
+                    final_limit = max(
+                        0.0,
+                        min(
+                            abs(config.angle_limit_deg),
+                            control_state.effective_limit_deg
+                            + abs(config.integral_limit_deg),
+                        ),
+                    )
+                    tilt_x_deg = clamp(
+                        tilt_x_deg,
+                        -final_limit,
+                        final_limit,
+                    )
+                    tilt_y_deg = clamp(
+                        tilt_y_deg,
+                        -final_limit,
+                        final_limit,
                     )
                     control_source = "servol_balance"
             elif self.servol_return_samples > 0:
@@ -659,11 +724,65 @@ class BallBalanceMotionController:
             self.servol_active = False
             self.servol_return_samples = 0
             self.last_tilt_time = None
+            self.last_integral_time = None
+            self.integral_active = False
 
     def _is_servol_active(self) -> bool:
         """Return whether ServoL continuous control is active."""
         with self.state_lock:
             return self.servol_active
+
+    def _update_integral_trim_locked(
+        self,
+        offset: tuple[float, float],
+        velocity: tuple[float, float],
+        now: float,
+    ) -> tuple[float, float]:
+        """Update the slow attitude trim from near-center steady error."""
+        config = self.config
+        if self.last_integral_time is None:
+            self.last_integral_time = now
+            self.integral_active = False
+            return self.integral_trim_x_deg, self.integral_trim_y_deg
+
+        dt = max(0.0, min(now - self.last_integral_time, 0.1))
+        self.last_integral_time = now
+        radius = math.hypot(offset[0], offset[1])
+        speed = math.hypot(velocity[0], velocity[1])
+        self.integral_active = (
+            config.integral_gain_deg > 0.0
+            and config.integral_limit_deg > 0.0
+            and radius <= config.integral_radius
+            and speed <= config.integral_speed
+        )
+        if not self.integral_active or dt <= 0.0:
+            return self.integral_trim_x_deg, self.integral_trim_y_deg
+
+        self.integral_trim_x_deg += (
+            config.integral_gain_deg * offset[1] * dt
+        )
+        self.integral_trim_y_deg += (
+            config.integral_gain_deg * offset[0] * dt
+        )
+        self._clamp_integral_trim_locked()
+        return self.integral_trim_x_deg, self.integral_trim_y_deg
+
+    def _clamp_integral_trim_locked(self) -> None:
+        """Limit the learned trim vector magnitude."""
+        limit = max(0.0, abs(self.config.integral_limit_deg))
+        if limit <= 0.0:
+            self.integral_trim_x_deg = 0.0
+            self.integral_trim_y_deg = 0.0
+            return
+        magnitude = math.hypot(
+            self.integral_trim_x_deg,
+            self.integral_trim_y_deg,
+        )
+        if magnitude <= limit or magnitude <= 1.0e-9:
+            return
+        scale = limit / magnitude
+        self.integral_trim_x_deg *= scale
+        self.integral_trim_y_deg *= scale
 
 
 def balance_tilt_from_offset(
@@ -1118,6 +1237,10 @@ def normalize_motion_config(config: MotionConfig) -> MotionConfig:
         config,
         angle_limit_deg=max(0.1, abs(config.angle_limit_deg)),
         tangent_damping_deg=max(0.0, config.tangent_damping_deg),
+        integral_gain_deg=max(0.0, config.integral_gain_deg),
+        integral_limit_deg=clamp(abs(config.integral_limit_deg), 0.0, 10.0),
+        integral_radius=clamp(config.integral_radius, 0.02, 1.0),
+        integral_speed=max(0.0, config.integral_speed),
         delay_compensation_sec=clamp(config.delay_compensation_sec, 0.0, 0.5),
         target_offset_x=clamp(config.target_offset_x, -1.0, 1.0),
         target_offset_y=clamp(config.target_offset_y, -1.0, 1.0),

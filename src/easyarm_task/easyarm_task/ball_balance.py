@@ -102,6 +102,38 @@ TRACKBAR_SPECS = [
         10.0,
     ),
     TrackbarSpec(
+        "i gain x0.01",
+        "motion",
+        "integral_gain_deg",
+        0.0,
+        2.0,
+        100.0,
+    ),
+    TrackbarSpec(
+        "i limit deg",
+        "motion",
+        "integral_limit_deg",
+        0.0,
+        10.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "i radius x0.01",
+        "motion",
+        "integral_radius",
+        0.05,
+        1.0,
+        100.0,
+    ),
+    TrackbarSpec(
+        "i speed x0.1",
+        "motion",
+        "integral_speed",
+        0.0,
+        3.0,
+        10.0,
+    ),
+    TrackbarSpec(
         "lead ms",
         "motion",
         "delay_compensation_sec",
@@ -503,6 +535,33 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--balance-integral-gain-deg",
+        type=float,
+        default=0.25,
+        help=(
+            "Slow integral trim gain in tilt degrees per normalized "
+            "offset-second."
+        ),
+    )
+    parser.add_argument(
+        "--balance-integral-limit-deg",
+        type=float,
+        default=4.0,
+        help="Maximum learned integral trim magnitude in degrees.",
+    )
+    parser.add_argument(
+        "--balance-integral-radius",
+        type=float,
+        default=0.65,
+        help="Only integrate visual error inside this normalized radius.",
+    )
+    parser.add_argument(
+        "--balance-integral-speed",
+        type=float,
+        default=0.8,
+        help="Only integrate visual error below this normalized xy speed.",
+    )
+    parser.add_argument(
         "--balance-delay-compensation-sec",
         type=float,
         default=0.0,
@@ -514,13 +573,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--balance-target-offset-x",
         type=float,
-        default=-0.17,
+        default=0.0,
         help="Target normalized x offset after yaw compensation.",
     )
     parser.add_argument(
         "--balance-target-offset-y",
         type=float,
-        default=0.43,
+        default=0.0,
         help="Target normalized y offset after yaw compensation.",
     )
     parser.add_argument(
@@ -872,6 +931,10 @@ def motion_config_from_args(args: argparse.Namespace) -> MotionConfig:
         angle_gain_deg=args.balance_angle_gain_deg,
         angle_derivative_gain_deg=args.balance_angle_d_gain_deg,
         tangent_damping_deg=args.balance_tangent_d_gain_deg,
+        integral_gain_deg=args.balance_integral_gain_deg,
+        integral_limit_deg=args.balance_integral_limit_deg,
+        integral_radius=args.balance_integral_radius,
+        integral_speed=args.balance_integral_speed,
         delay_compensation_sec=args.balance_delay_compensation_sec,
         target_offset_x=args.balance_target_offset_x,
         target_offset_y=args.balance_target_offset_y,
@@ -1496,6 +1559,13 @@ def control_log_fields() -> list[str]:
         "kp_deg",
         "kd_deg",
         "tangent_damping_deg",
+        "integral_gain_deg",
+        "integral_limit_deg",
+        "integral_radius",
+        "integral_speed",
+        "integral_trim_x_deg",
+        "integral_trim_y_deg",
+        "integral_active",
         "angle_limit_deg",
         "lead_time_sec",
         "filter_alpha",
@@ -1622,6 +1692,13 @@ def build_control_log_row(
         "kp_deg": config.angle_gain_deg,
         "kd_deg": config.angle_derivative_gain_deg,
         "tangent_damping_deg": config.tangent_damping_deg,
+        "integral_gain_deg": config.integral_gain_deg,
+        "integral_limit_deg": config.integral_limit_deg,
+        "integral_radius": config.integral_radius,
+        "integral_speed": config.integral_speed,
+        "integral_trim_x_deg": motion_snapshot.get("integral_trim_x_deg"),
+        "integral_trim_y_deg": motion_snapshot.get("integral_trim_y_deg"),
+        "integral_active": motion_snapshot.get("integral_active"),
         "angle_limit_deg": config.angle_limit_deg,
         "lead_time_sec": config.delay_compensation_sec,
         "filter_alpha": config.filter_alpha,
@@ -2371,6 +2448,14 @@ def main() -> int:
         raise SystemExit(
             "--balance-delay-compensation-sec must be nonnegative"
         )
+    if args.balance_integral_gain_deg < 0.0:
+        raise SystemExit("--balance-integral-gain-deg must be nonnegative")
+    if args.balance_integral_limit_deg < 0.0:
+        raise SystemExit("--balance-integral-limit-deg must be nonnegative")
+    if args.balance_integral_radius <= 0.0:
+        raise SystemExit("--balance-integral-radius must be positive")
+    if args.balance_integral_speed < 0.0:
+        raise SystemExit("--balance-integral-speed must be nonnegative")
     if not -1.0 <= args.balance_target_offset_x <= 1.0:
         raise SystemExit("--balance-target-offset-x must be in [-1, 1]")
     if not -1.0 <= args.balance_target_offset_y <= 1.0:
