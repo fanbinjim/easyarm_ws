@@ -126,12 +126,44 @@ TRACKBAR_SPECS = [
         100.0,
     ),
     TrackbarSpec(
+        "i dead x0.01",
+        "motion",
+        "integral_deadband_radius",
+        0.0,
+        0.30,
+        100.0,
+    ),
+    TrackbarSpec(
         "i speed x0.1",
         "motion",
         "integral_speed",
         0.0,
         3.0,
         10.0,
+    ),
+    TrackbarSpec(
+        "init trim x",
+        "motion",
+        "initial_trim_x_deg",
+        -5.0,
+        5.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "init trim y",
+        "motion",
+        "initial_trim_y_deg",
+        -5.0,
+        5.0,
+        10.0,
+    ),
+    TrackbarSpec(
+        "vel filter x0.01",
+        "motion",
+        "velocity_filter_alpha",
+        0.05,
+        1.0,
+        100.0,
     ),
     TrackbarSpec(
         "lead ms",
@@ -537,7 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--balance-integral-gain-deg",
         type=float,
-        default=0.25,
+        default=0.04,
         help=(
             "Slow integral trim gain in tilt degrees per normalized "
             "offset-second."
@@ -552,14 +584,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--balance-integral-radius",
         type=float,
-        default=0.65,
+        default=0.45,
         help="Only integrate visual error inside this normalized radius.",
+    )
+    parser.add_argument(
+        "--balance-integral-deadband-radius",
+        type=float,
+        default=0.12,
+        help="Stop integral trim updates inside this normalized radius.",
     )
     parser.add_argument(
         "--balance-integral-speed",
         type=float,
-        default=0.8,
+        default=0.25,
         help="Only integrate visual error below this normalized xy speed.",
+    )
+    parser.add_argument(
+        "--balance-initial-trim-x-deg",
+        type=float,
+        default=-1.96,
+        help="Startup roll trim added to the balance controller.",
+    )
+    parser.add_argument(
+        "--balance-initial-trim-y-deg",
+        type=float,
+        default=0.44,
+        help="Startup pitch trim added to the balance controller.",
+    )
+    parser.add_argument(
+        "--balance-velocity-filter-alpha",
+        type=float,
+        default=0.35,
+        help="Low-pass alpha for visual velocity estimation.",
     )
     parser.add_argument(
         "--balance-delay-compensation-sec",
@@ -642,25 +698,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--balance-center-angle-limit-deg",
         type=float,
-        default=6.0,
+        default=4.0,
         help="Tilt limit blended in near the center region.",
     )
     parser.add_argument(
         "--balance-center-position-scale",
         type=float,
-        default=0.15,
+        default=0.22,
         help="Position gain scale blended in near the center region.",
     )
     parser.add_argument(
         "--balance-center-radial-d-gain-deg",
         type=float,
-        default=4.0,
+        default=5.0,
         help="Extra radial damping gain while center damping is active.",
     )
     parser.add_argument(
         "--balance-center-tangent-d-gain-deg",
         type=float,
-        default=8.0,
+        default=6.0,
         help="Extra tangent damping gain while center damping is active.",
     )
     parser.add_argument(
@@ -725,7 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--balance-recovery-tangent-d-gain-deg",
         type=float,
-        default=8.0,
+        default=12.0,
         help="Edge recovery tangent damping gain in tilt degrees.",
     )
     parser.add_argument(
@@ -737,7 +793,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--balance-tilt-rate-limit-deg-s",
         type=float,
-        default=80.0,
+        default=55.0,
         help="Maximum tilt command slew rate in degrees per second.",
     )
     parser.add_argument(
@@ -934,7 +990,11 @@ def motion_config_from_args(args: argparse.Namespace) -> MotionConfig:
         integral_gain_deg=args.balance_integral_gain_deg,
         integral_limit_deg=args.balance_integral_limit_deg,
         integral_radius=args.balance_integral_radius,
+        integral_deadband_radius=args.balance_integral_deadband_radius,
         integral_speed=args.balance_integral_speed,
+        initial_trim_x_deg=args.balance_initial_trim_x_deg,
+        initial_trim_y_deg=args.balance_initial_trim_y_deg,
+        velocity_filter_alpha=args.balance_velocity_filter_alpha,
         delay_compensation_sec=args.balance_delay_compensation_sec,
         target_offset_x=args.balance_target_offset_x,
         target_offset_y=args.balance_target_offset_y,
@@ -1562,7 +1622,11 @@ def control_log_fields() -> list[str]:
         "integral_gain_deg",
         "integral_limit_deg",
         "integral_radius",
+        "integral_deadband_radius",
         "integral_speed",
+        "initial_trim_x_deg",
+        "initial_trim_y_deg",
+        "velocity_filter_alpha",
         "integral_trim_x_deg",
         "integral_trim_y_deg",
         "integral_active",
@@ -1695,7 +1759,11 @@ def build_control_log_row(
         "integral_gain_deg": config.integral_gain_deg,
         "integral_limit_deg": config.integral_limit_deg,
         "integral_radius": config.integral_radius,
+        "integral_deadband_radius": config.integral_deadband_radius,
         "integral_speed": config.integral_speed,
+        "initial_trim_x_deg": config.initial_trim_x_deg,
+        "initial_trim_y_deg": config.initial_trim_y_deg,
+        "velocity_filter_alpha": config.velocity_filter_alpha,
         "integral_trim_x_deg": motion_snapshot.get("integral_trim_x_deg"),
         "integral_trim_y_deg": motion_snapshot.get("integral_trim_y_deg"),
         "integral_active": motion_snapshot.get("integral_active"),
@@ -2454,8 +2522,16 @@ def main() -> int:
         raise SystemExit("--balance-integral-limit-deg must be nonnegative")
     if args.balance_integral_radius <= 0.0:
         raise SystemExit("--balance-integral-radius must be positive")
+    if args.balance_integral_deadband_radius < 0.0:
+        raise SystemExit(
+            "--balance-integral-deadband-radius must be nonnegative"
+        )
     if args.balance_integral_speed < 0.0:
         raise SystemExit("--balance-integral-speed must be nonnegative")
+    if not 0.0 < args.balance_velocity_filter_alpha <= 1.0:
+        raise SystemExit(
+            "--balance-velocity-filter-alpha must be in (0, 1]"
+        )
     if not -1.0 <= args.balance_target_offset_x <= 1.0:
         raise SystemExit("--balance-target-offset-x must be in [-1, 1]")
     if not -1.0 <= args.balance_target_offset_y <= 1.0:

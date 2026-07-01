@@ -43,7 +43,11 @@ class MotionConfig:
     integral_gain_deg: float
     integral_limit_deg: float
     integral_radius: float
+    integral_deadband_radius: float
     integral_speed: float
+    initial_trim_x_deg: float
+    initial_trim_y_deg: float
+    velocity_filter_alpha: float
     delay_compensation_sec: float
     target_offset_x: float
     target_offset_y: float
@@ -132,8 +136,8 @@ class BallBalanceMotionController:
         self.last_target_pose = None
         self.last_control_offset: tuple[float, float] | None = None
         self.last_control_state = BalanceControlState()
-        self.integral_trim_x_deg = 0.0
-        self.integral_trim_y_deg = 0.0
+        self.integral_trim_x_deg = self.config.initial_trim_x_deg
+        self.integral_trim_y_deg = self.config.initial_trim_y_deg
         self.integral_active = False
         self.last_integral_time: float | None = None
         self.servol_thread = threading.Thread(
@@ -420,10 +424,11 @@ class BallBalanceMotionController:
         return offset_x - target_x, offset_y - target_y
 
     def reset_integral_trim(self) -> None:
-        """Clear the learned attitude trim."""
+        """Reset learned attitude trim to the configured startup value."""
         with self.state_lock:
-            self.integral_trim_x_deg = 0.0
-            self.integral_trim_y_deg = 0.0
+            self.integral_trim_x_deg = self.config.initial_trim_x_deg
+            self.integral_trim_y_deg = self.config.initial_trim_y_deg
+            self._clamp_integral_trim_locked()
             self.integral_active = False
             self.last_integral_time = None
 
@@ -457,9 +462,16 @@ class BallBalanceMotionController:
             latest_offset = (offset_x, offset_y)
             self.measurement_history.append((now, offset_x, offset_y))
             fitted_velocity = fit_velocity(self.measurement_history)
+            velocity_alpha = self.config.velocity_filter_alpha
             self.filtered_velocity = (
-                fitted_velocity[0],
-                fitted_velocity[1],
+                self.filtered_velocity[0]
+                + velocity_alpha * (
+                    fitted_velocity[0] - self.filtered_velocity[0]
+                ),
+                self.filtered_velocity[1]
+                + velocity_alpha * (
+                    fitted_velocity[1] - self.filtered_velocity[1]
+                ),
             )
             self.filtered_offset = latest_offset
             self.last_measurement_time = now
@@ -548,8 +560,9 @@ class BallBalanceMotionController:
             return
         with self.state_lock:
             self.origin_pose = response.pose
-            self.integral_trim_x_deg = 0.0
-            self.integral_trim_y_deg = 0.0
+            self.integral_trim_x_deg = self.config.initial_trim_x_deg
+            self.integral_trim_y_deg = self.config.initial_trim_y_deg
+            self._clamp_integral_trim_locked()
             self.integral_active = False
             self.last_integral_time = None
         pose = response.pose.pose
@@ -752,6 +765,7 @@ class BallBalanceMotionController:
         self.integral_active = (
             config.integral_gain_deg > 0.0
             and config.integral_limit_deg > 0.0
+            and radius >= config.integral_deadband_radius
             and radius <= config.integral_radius
             and speed <= config.integral_speed
         )
@@ -870,6 +884,18 @@ def balance_tilt_from_pd(
         + center_weight * config.center_tangent_damping_deg
         + edge_weight * config.recovery_tangent_damping_deg
     )
+    center_quiet_weight = 1.0 - smoothstep(
+        config.center_radius * 0.45,
+        config.center_radius,
+        radius,
+    )
+    velocity_deadband = 0.08 * center_quiet_weight
+    if abs(radial_velocity) < velocity_deadband:
+        radial_velocity = 0.0
+    if abs(tangent_velocity) < velocity_deadband:
+        tangent_velocity = 0.0
+    tangent_damping_gain *= 1.0 - 0.45 * center_quiet_weight
+    radial_damping_gain *= 1.0 - 0.25 * center_quiet_weight
     effective_limit = continuous_effective_limit(config, radius)
 
     radial_command = -position_gain * radius - radial_damping_gain * (
@@ -901,6 +927,9 @@ def balance_tilt_from_pd(
 
     tilt_x = clamp(tilt_x, -effective_limit, effective_limit)
     tilt_y = clamp(tilt_y, -effective_limit, effective_limit)
+    if radius < config.center_radius * 0.32 and speed < 0.18:
+        tilt_x *= 0.65
+        tilt_y *= 0.65
     state = BalanceControlState(
         mode="balance",
         radius=radius,
@@ -1240,7 +1269,15 @@ def normalize_motion_config(config: MotionConfig) -> MotionConfig:
         integral_gain_deg=max(0.0, config.integral_gain_deg),
         integral_limit_deg=clamp(abs(config.integral_limit_deg), 0.0, 10.0),
         integral_radius=clamp(config.integral_radius, 0.02, 1.0),
+        integral_deadband_radius=clamp(
+            min(config.integral_deadband_radius, config.integral_radius),
+            0.0,
+            0.5,
+        ),
         integral_speed=max(0.0, config.integral_speed),
+        initial_trim_x_deg=clamp(config.initial_trim_x_deg, -10.0, 10.0),
+        initial_trim_y_deg=clamp(config.initial_trim_y_deg, -10.0, 10.0),
+        velocity_filter_alpha=clamp(config.velocity_filter_alpha, 0.01, 1.0),
         delay_compensation_sec=clamp(config.delay_compensation_sec, 0.0, 0.5),
         target_offset_x=clamp(config.target_offset_x, -1.0, 1.0),
         target_offset_y=clamp(config.target_offset_y, -1.0, 1.0),
